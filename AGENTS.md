@@ -11,8 +11,8 @@ SkillsGate is a visual AI skill manager for coding agents across Desktop (Electr
 
 ---
 
-## 2. Supported Coding Agent Harnesses (27 Agents)
-SkillsGate provides unified skill discovery and synchronization across 27 agent targets:
+## 2. Supported Coding Agent Harnesses (28 Agents)
+SkillsGate provides unified skill discovery and synchronization across 28 agent targets:
 
 1. **Claude Code** (`claude-code`)
 2. **Cursor** (`cursor`)
@@ -35,12 +35,13 @@ SkillsGate provides unified skill discovery and synchronization across 27 agent 
 19. **Zed** (`zed`)
 20. **Universal** (`universal`, `.agents/skills`)
 21. **Antigravity** (`antigravity`, `AG`, `.gemini/skills`, `~/.gemini/config/skills` or `~/.gemini/skills`)
-22. **CodeBuddy CN** (`codebuddy`, `CB`, `.codebuddy/skills`, `~/.codebuddy/skills`)
-23. **WorkBuddy** (`workbuddy`, `WB`, `.workbuddy/skills`, `~/.workbuddy/skills`)
-24. **WorkBuddy AI** (`workbuddy-ai`, `WBA`, `.workbuddy-ai/skills`, `~/.workbuddy-ai/skills`)
-25. **Trae CN** (`trae-cn`, `TCN`, `.trae-cn/skills`, `~/.trae-cn/skills`)
-26. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
-27. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
+22. **CodeBuddy** (`codebuddy`, `CB`, `.codebuddy/skills`, `~/.codebuddy/skills`)
+23. **CodeBuddy CN** (`codebuddy-cn`, `CBN`, `.codebuddy-cn/skills`, `~/.codebuddycn/skills` or `~/.codebuddy-cn/skills`)
+24. **WorkBuddy** (`workbuddy`, `WB`, `.workbuddy/skills`, `~/.workbuddy/skills`)
+25. **WorkBuddy AI** (`workbuddy-ai`, `WBA`, `.workbuddy-ai/skills`, `~/.workbuddy-ai/skills`)
+26. **Trae CN** (`trae-cn`, `TCN`, `.trae-cn/skills`, `~/.trae-cn/skills`)
+27. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
+28. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
 
 ---
 
