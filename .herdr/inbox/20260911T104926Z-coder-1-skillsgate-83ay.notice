@@ -1,0 +1,10 @@
+{
+  "agent": "coder-1",
+  "bean": "skillsgate-83ay",
+  "status": "DONE",
+  "summary": "Added 7 coding agent harnesses with symlink safety and full-stack assets",
+  "report": ".herdr/reports/skillsgate-83ay-coder-1.md",
+  "timestamp": "20260911T104926Z",
+  "branch": "fleet/coder-skillsgate",
+  "head_commit": "652a1bd01750f3d7cc48e6423c2a31b7cb0b28ba"
+}
