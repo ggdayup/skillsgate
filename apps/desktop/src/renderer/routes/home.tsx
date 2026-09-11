@@ -17,7 +17,9 @@ import { AgentLogo, AgentLogoRow } from "../components/agent-logo"
 // Map display names to registry keys
 const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   "Claude Code": "claude-code",
+  Antigravity: "antigravity",
   Cursor: "cursor",
+  "CodeBuddy CN": "codebuddy",
   "GitHub Copilot": "github-copilot",
   Windsurf: "windsurf",
   Cline: "cline",
@@ -30,8 +32,13 @@ const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   OpenCode: "opencode",
   OpenClaw: "openclaw",
   "Pear AI": "pear-ai",
+  "Pi Coding Agent": "pi",
   "Roo Code": "roo-code",
   Trae: "trae",
+  "Trae CN": "trae-cn",
+  WorkBuddy: "workbuddy",
+  "WorkBuddy AI": "workbuddy-ai",
+  "Mercury Agent": "mercury",
   Zed: "zed",
   "Universal (.agents/skills)": "universal",
 }

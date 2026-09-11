@@ -1,11 +1,11 @@
 ---
 # skillsgate-83ay
 title: 'feat: add 7 coding agent harnesses to skillsgate'
-status: todo
+status: completed
 type: task
 priority: high
 created_at: 2026-09-11T10:38:37Z
-updated_at: 2026-09-11T10:38:37Z
+updated_at: 2026-09-11T10:48:49Z
 ---
 
 Add first-class support for 7 coding agent harnesses across SkillsGate (packages/cli, packages/tui, apps/desktop):
@@ -18,3 +18,7 @@ Add first-class support for 7 coding agent harnesses across SkillsGate (packages
 - mercury (Mercury Agent)
 
 Include deep realpath normalization in installer.ts for symlinked ~/.agents/skills directories, UI colors/shortcodes, and desktop SVG brand assets.
+
+## Summary of Changes
+
+Implemented seven new coding agent harnesses across CLI, TUI, and desktop; added desktop SVG logos; hardened symlink installs with realpath detection for canonical skill-store aliases; verified with npm run typecheck --workspace=skillsgate.
