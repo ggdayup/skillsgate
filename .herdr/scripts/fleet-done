@@ -32,7 +32,10 @@ else
 fi
 
 INBOX_DIR="$REPO_ROOT/.herdr/inbox"
-mkdir -p "$INBOX_DIR"
+if ! mkdir -p "$INBOX_DIR" 2>/dev/null; then
+  INBOX_DIR="$PWD/.herdr/inbox"
+  mkdir -p "$INBOX_DIR"
+fi
 
 TIMESTAMP="$(date -u +"%Y%m%dT%H%M%SZ")"
 NOTICE_FILE="$INBOX_DIR/${TIMESTAMP}-${AGENT}-${BEAN}.notice"
@@ -43,7 +46,7 @@ HEAD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || echo "none")"
 
 # Safely serialize JSON to avoid escaping issues with quotes or newlines
 python3 -c '
-import sys, json
+import sys, json, os
 
 agent, bean, status, summary, report, timestamp, branch, head, out_path = sys.argv[1:10]
 payload = {
@@ -56,9 +59,19 @@ payload = {
     "branch": branch,
     "head_commit": head
 }
-with open(out_path, "w", encoding="utf-8") as f:
-    json.dump(payload, f, indent=2, ensure_ascii=False)
-    f.write("\n")
-' "$AGENT" "$BEAN" "$STATUS" "$SUMMARY" "$REPORT" "$TIMESTAMP" "$CURRENT_BRANCH" "$HEAD_COMMIT" "$NOTICE_FILE"
 
-echo "[fleet-done] Notice recorded: $NOTICE_FILE"
+try:
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    print(f"[fleet-done] Notice recorded: {out_path}")
+except PermissionError:
+    # Sandbox fallback: write to worktree-local inbox
+    local_inbox = os.path.join(os.getcwd(), ".herdr", "inbox")
+    os.makedirs(local_inbox, exist_ok=True)
+    local_path = os.path.join(local_inbox, os.path.basename(out_path))
+    with open(local_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    print(f"[fleet-done] [WARN] Root inbox unwritable (sandbox active). Notice saved to worktree: {local_path}")
+' "$AGENT" "$BEAN" "$STATUS" "$SUMMARY" "$REPORT" "$TIMESTAMP" "$CURRENT_BRANCH" "$HEAD_COMMIT" "$NOTICE_FILE"
