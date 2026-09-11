@@ -48,7 +48,7 @@ const AGENT_LOGO_FILTERS: Record<string, string> = {
   "workbuddy-ai": "none",
 }
 
-const DISPLAY_NAME_TO_KEY: Record<string, string> = {
+export const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   "Claude Code": "claude-code",
   Antigravity: "antigravity",
   Cursor: "cursor",

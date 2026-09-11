@@ -12,36 +12,7 @@ import { List } from "react-window"
 import { marked } from "marked"
 import { electronAPI } from "../lib/electron-api"
 import { SkillEditor, type SkillEditorHandle } from "../components/skill-editor"
-import { AgentLogo, AgentLogoRow } from "../components/agent-logo"
-
-// Map display names to registry keys
-const DISPLAY_NAME_TO_KEY: Record<string, string> = {
-  "Claude Code": "claude-code",
-  Antigravity: "antigravity",
-  Cursor: "cursor",
-  "CodeBuddy CN": "codebuddy",
-  "GitHub Copilot": "github-copilot",
-  Windsurf: "windsurf",
-  Cline: "cline",
-  Continue: "continue",
-  "Codex CLI": "codex-cli",
-  Amp: "amp",
-  Goose: "goose",
-  Junie: "junie",
-  "Kilo Code": "kilo-code",
-  OpenCode: "opencode",
-  OpenClaw: "openclaw",
-  "Pear AI": "pear-ai",
-  "Pi Coding Agent": "pi",
-  "Roo Code": "roo-code",
-  Trae: "trae",
-  "Trae CN": "trae-cn",
-  WorkBuddy: "workbuddy",
-  "WorkBuddy AI": "workbuddy-ai",
-  "Mercury Agent": "mercury",
-  Zed: "zed",
-  "Universal (.agents/skills)": "universal",
-}
+import { AgentLogo, AgentLogoRow, DISPLAY_NAME_TO_KEY } from "../components/agent-logo"
 
 function StarIcon({
   size = 14,

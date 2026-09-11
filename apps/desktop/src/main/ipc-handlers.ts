@@ -1283,6 +1283,14 @@ async function discoverSkillsInDir(
 // Install skill files to an agent directory (symlink with copy fallback)
 // ---------------------------------------------------------------------------
 
+async function realpathOrResolve(dir: string): Promise<string> {
+  try {
+    return await fs.realpath(dir)
+  } catch {
+    return path.resolve(dir)
+  }
+}
+
 async function installSkillToAgent(
   skillDir: string,
   skillName: string,
@@ -1296,8 +1304,16 @@ async function installSkillToAgent(
     // Ensure agent skills directory exists
     await fs.mkdir(agent.globalSkillsDir, { recursive: true })
 
-    // If the agent IS the universal agent, the canonical dir IS the target
-    if (path.resolve(agentTargetDir) === path.resolve(canonicalDir)) {
+    const resolvedCanonical = path.resolve(canonicalDir)
+    const resolvedAgent = path.resolve(agentTargetDir)
+    const realAgentSkillsDir = await realpathOrResolve(agent.globalSkillsDir)
+    const realCanonicalDir = await realpathOrResolve(CANONICAL_SKILLS_DIR)
+    const isCanonicalAgent =
+      resolvedCanonical === resolvedAgent ||
+      realAgentSkillsDir === realCanonicalDir
+
+    // If the agent IS the universal agent or points directly to canonical store, write directly
+    if (isCanonicalAgent) {
       // Copy skill files directly to the canonical dir
       await fs.rm(canonicalDir, { recursive: true, force: true }).catch(() => {})
       await fs.cp(skillDir, canonicalDir, { recursive: true })
