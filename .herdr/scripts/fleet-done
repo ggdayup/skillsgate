@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# fleet-done: Agent status announcement CLI for herdr-run
+# Usage: fleet-done <agent> <bean> DONE|BLOCKED|CHANGES "<one-line-summary>" [report-path]
+
+set -euo pipefail
+
+if [ "$#" -lt 4 ]; then
+  echo "Usage: $0 <agent> <bean> <DONE|BLOCKED|CHANGES> \"<one-line-summary>\" [report-path]" >&2
+  exit 1
+fi
+
+AGENT="$1"
+BEAN="$2"
+STATUS="$(echo "$3" | tr '[:lower:]' '[:upper:]')"
+SUMMARY="$4"
+REPORT="${5:-}"
+
+case "$STATUS" in
+  DONE|BLOCKED|CHANGES) ;;
+  *)
+    echo "Error: Status must be one of DONE, BLOCKED, or CHANGES (got: $STATUS)" >&2
+    exit 1
+    ;;
+esac
+
+# Find main repository root (handles both main tree and detached git worktrees)
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || echo "")"
+if [ -n "$COMMON_DIR" ]; then
+  REPO_ROOT="$(cd "$COMMON_DIR/.." && pwd)"
+else
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+fi
+
+INBOX_DIR="$REPO_ROOT/.herdr/inbox"
+mkdir -p "$INBOX_DIR"
+
+TIMESTAMP="$(date -u +"%Y%m%dT%H%M%SZ")"
+NOTICE_FILE="$INBOX_DIR/${TIMESTAMP}-${AGENT}-${BEAN}.notice"
+
+CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || echo "unknown")"
+[ -z "$CURRENT_BRANCH" ] && CURRENT_BRANCH="unknown"
+HEAD_COMMIT="$(git rev-parse --verify HEAD 2>/dev/null || echo "none")"
+
+# Safely serialize JSON to avoid escaping issues with quotes or newlines
+python3 -c '
+import sys, json
+
+agent, bean, status, summary, report, timestamp, branch, head, out_path = sys.argv[1:10]
+payload = {
+    "agent": agent,
+    "bean": bean,
+    "status": status,
+    "summary": summary,
+    "report": report,
+    "timestamp": timestamp,
+    "branch": branch,
+    "head_commit": head
+}
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+' "$AGENT" "$BEAN" "$STATUS" "$SUMMARY" "$REPORT" "$TIMESTAMP" "$CURRENT_BRANCH" "$HEAD_COMMIT" "$NOTICE_FILE"
+
+echo "[fleet-done] Notice recorded: $NOTICE_FILE"
