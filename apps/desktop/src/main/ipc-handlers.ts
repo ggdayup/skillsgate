@@ -70,8 +70,9 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 function commandExists(command: string): Promise<boolean> {
+  const binary = process.platform === "win32" ? "where" : "which"
   return new Promise((resolve) => {
-    execFile("which", [command], (error) => resolve(!error))
+    execFile(binary, [command], (error) => resolve(!error))
   })
 }
 

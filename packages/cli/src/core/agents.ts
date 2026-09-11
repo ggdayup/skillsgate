@@ -30,8 +30,9 @@ async function dirExists(p: string): Promise<boolean> {
 }
 
 async function commandExists(command: string): Promise<boolean> {
+  const binary = process.platform === "win32" ? "where" : "which";
   try {
-    await execFileAsync("which", [command]);
+    await execFileAsync(binary, [command]);
     return true;
   } catch {
     return false;
