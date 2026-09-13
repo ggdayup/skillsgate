@@ -1,4 +1,4 @@
-import { memo } from "react"
+import { memo, useMemo } from "react"
 import ampLogo from "../assets/agent-logos/amp.svg"
 import antigravityLogo from "../assets/agent-logos/antigravity.svg"
 import claudeLogo from "../assets/agent-logos/claude.svg"
@@ -156,12 +156,47 @@ export const AgentLogo = memo(function AgentLogo({ name, size = 16, shortCode, c
   )
 })
 
-export const AgentLogoRow = memo(function AgentLogoRow({ agents, size = 14 }: { agents: string[]; size?: number }) {
+/**
+ * Renders the agent badges for a skill.
+ *
+ * `max` caps how many logos are painted and collapses the remainder into a
+ * `+N` chip. This matters in narrow containers (e.g. the 288px Local Library
+ * column): without a cap a skill installed in a dozen agents pushes the row
+ * wide enough that the skill name is squeezed down to a couple of characters.
+ */
+export const AgentLogoRow = memo(function AgentLogoRow({
+  agents,
+  size = 14,
+  max,
+}: {
+  agents: string[]
+  size?: number
+  max?: number
+}) {
+  const unique = useMemo(() => Array.from(new Set(agents)), [agents])
+  const shown = max !== undefined && unique.length > max ? unique.slice(0, max) : unique
+  const hiddenCount = unique.length - shown.length
+
   return (
-    <span className="flex items-center gap-1">
-      {agents.map((agent) => (
+    <span className="flex items-center gap-1" title={unique.join(", ")}>
+      {shown.map((agent) => (
         <AgentLogo key={agent} name={agent} size={size} />
       ))}
+      {hiddenCount > 0 && (
+        <span
+          className="inline-flex items-center justify-center rounded-full border border-border bg-surface-hover font-mono text-muted flex-shrink-0 select-none"
+          style={{
+            height: size,
+            minWidth: size,
+            padding: "0 3px",
+            fontSize: Math.max(7, Math.round(size * 0.55)),
+            lineHeight: 1,
+          }}
+          title={unique.slice(shown.length).join(", ")}
+        >
+          +{hiddenCount}
+        </span>
+      )}
     </span>
   )
 })

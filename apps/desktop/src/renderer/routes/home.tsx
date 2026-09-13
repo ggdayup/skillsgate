@@ -459,7 +459,10 @@ const SkillListRow = memo(function SkillListRow({
             </span>
           </span>
         )}
-        <span className="text-[12px] font-medium truncate flex-1 min-w-0">
+        <span
+          className="text-[12px] font-medium truncate flex-1 min-w-[96px]"
+          title={skill.name}
+        >
           {skill.name}
         </span>
         <span
@@ -484,7 +487,7 @@ const SkillListRow = memo(function SkillListRow({
           <StarIcon size={13} filled={isFavorited} />
         </span>
         <span className="ml-2 flex-shrink-0">
-          <AgentLogoRow agents={skill.agents} size={14} />
+          <AgentLogoRow agents={skill.agents} size={14} max={3} />
         </span>
       </button>
     </div>
