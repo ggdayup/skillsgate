@@ -13,7 +13,11 @@ import {
 import { listInstalledSkillsInternal } from "../ipc-handlers"
 
 const home = os.homedir()
-const CANONICAL_SKILLS_DIR = path.join(home, ".agents", "skills")
+// Core skills live in ~/.agents/skills; non-core (per-tool) installs live in
+// ~/.agents/.store. Push mirrors both, so neither set is silently dropped.
+const CORE_SKILLS_DIR = path.join(home, ".agents", "skills")
+const STORE_SKILLS_DIR = path.join(home, ".agents", ".store")
+const SKILL_ROOTS = [CORE_SKILLS_DIR, STORE_SKILLS_DIR]
 
 export interface PushPlanEntry {
   folderName: string
@@ -67,12 +71,14 @@ export async function planPush(
   server: RemoteServer,
   options: PushOptions,
 ): Promise<PushPreview> {
-  // 1. List local canonical skills (scope=global AND under CANONICAL_SKILLS_DIR)
+  // 1. List local skills (scope=global AND under a known skill root)
   const allLocal = await listInstalledSkillsInternal({ skipCustomPaths: true })
   const localCanonical = allLocal.filter(
     (s) =>
       s.scope === "global" &&
-      path.resolve(s.canonicalPath).startsWith(path.resolve(CANONICAL_SKILLS_DIR)),
+      SKILL_ROOTS.some((root) =>
+        path.resolve(s.canonicalPath).startsWith(path.resolve(root)),
+      ),
   )
 
   // 2. Hash each local SKILL.md
@@ -192,7 +198,12 @@ export async function applyPush(
   // Uploads (added + updated). Use uploadSkillDir which handles tar pipeline.
   for (const entry of [...preview.toAdd, ...preview.toUpdate]) {
     try {
-      await uploadSkillDir(server, CANONICAL_SKILLS_DIR, entry.folderName, remoteBase)
+      await uploadSkillDir(
+        server,
+        path.dirname(entry.localPath),
+        entry.folderName,
+        remoteBase,
+      )
     } catch (err) {
       errors.push({
         folderName: entry.folderName,

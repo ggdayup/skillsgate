@@ -159,6 +159,72 @@ export const zhCN: Record<string, string> = {
   "Applies immediately. Untranslated text stays in English.":
     "立即生效。未翻译的文本将显示英文。",
 
+  // Core skill set
+  Core: "核心",
+  "Core Skills": "核心技能",
+  "Core skills": "核心技能",
+  "Loading core skills...": "正在加载核心技能…",
+  "One canonical set of skills, symlinked into every detected tool. Tools can still keep their own skills on top.":
+    "一套权威技能集，以软链接分发到每个已检测到的工具。各工具仍可在其上保留自己的技能。",
+  "Fan out to tools": "分发到各工具",
+  "Creates the missing symlinks. Never overwrites a real directory — same-name conflicts are skipped and reported.":
+    "补齐缺失的软链接。绝不覆盖真实目录——同名冲突会被跳过并列出。",
+  "Check for changes": "检查变更",
+  "Checking...": "检查中…",
+  "Sync now": "立即同步",
+  "Syncing...": "同步中…",
+  "Apply changes": "应用变更",
+  "Applying...": "应用中…",
+  "Everything is already fanned out. Nothing to do.": "已经全部分发完成，无需操作。",
+  "How much of the core set each tool currently has linked.": "各工具当前已链接的核心技能数量。",
+  "Fan-out per skill. Excluding a skill removes it from one tool without touching the core set.":
+    "每个技能的分发情况。排除某个技能只会把它从单个工具移除，不影响核心集合。",
+  "No core skills match your search.": "没有匹配搜索的核心技能。",
+  "Back up the existing directory, then link the core skill": "备份现有目录，然后链接核心技能",
+  "backup & link": "备份并链接",
+  "Include this skill in this tool again": "让该技能重新包含进此工具",
+  "Remove from the core set and unlink everywhere": "从核心集合移除并在所有工具中解除链接",
+  "a real directory already sits at this name": "该名称下已存在真实目录",
+  "Fully synced": "已完全同步",
+  "Needs sync": "待同步",
+  Conflicts: "冲突",
+  "Skipped conflicts": "跳过冲突",
+  "Skipped excluded": "跳过已排除",
+  conflict: "冲突",
+  "conflicts, skipped": "冲突，已跳过",
+  Excluded: "已排除",
+  excluded: "已排除",
+  include: "包含",
+  exclude: "排除",
+  "to link": "待链接",
+  "stale, to unlink": "失效，待解除",
+  stale: "失效",
+  "Stale links": "失效链接",
+  synced: "已同步",
+  linked: "已链接",
+  Linked: "已链接",
+  Unlinked: "已解除",
+  missing: "缺失",
+  Missing: "缺失",
+  pending: "待处理",
+  "Already present": "已存在",
+  "Filter skills...": "筛选技能…",
+
+  // Core page — destructive actions
+  Confirm: "确认",
+  "click again to confirm": "再点一次确认",
+
+  // Core fan-out badge (Installed detail panel)
+  core: "核心",
+  "fanned out": "已分发",
+
+  // Core as an install target (Discover)
+  "Core — every tool": "核心 — 所有工具",
+  "every tool": "所有工具",
+  "Core already covers every tool": "核心已覆盖所有工具",
+  "Installed once into ~/.agents/skills, then linked into each tool.":
+    "只安装一份到 ~/.agents/skills，然后软链接到每个工具。",
+
   // Status messages
   "Save failed": "保存失败",
 }

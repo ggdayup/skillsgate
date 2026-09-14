@@ -33,6 +33,24 @@ const navItems: NavItem[] = [
     ),
   },
   {
+    to: "/core",
+    label: "Core",
+    icon: (
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 2l2.9 6.26 6.85.72-5.1 4.6 1.42 6.72L12 16.9l-6.07 3.4 1.42-6.72-5.1-4.6 6.85-.72z" />
+      </svg>
+    ),
+  },
+  {
     to: "/discover",
     label: "Discover",
     icon: (
@@ -148,20 +166,28 @@ export function Sidebar() {
   const location = useLocation()
   const isHome = location.pathname === "/"
   const [serverCount, setServerCount] = useState(0)
+  const [corePending, setCorePending] = useState(0)
   const [appVersion, setAppVersion] = useState("")
 
   useEffect(() => {
     electronAPI.serversCount().then(setServerCount).catch(() => {})
     electronAPI.appGetVersion().then(setAppVersion).catch(() => {})
+    // Badge = tools that are not fully fanned out, i.e. the actionable count.
+    electronAPI
+      .coreSummary()
+      .then((summary) => setCorePending(summary.needsWork))
+      .catch(() => {})
   }, [])
 
   // Enrich nav items with badge data
   const enrichedNavItems = useMemo(
     () =>
-      navItems.map((item) =>
-        item.to === "/servers" ? { ...item, badge: serverCount } : item,
-      ),
-    [serverCount],
+      navItems.map((item) => {
+        if (item.to === "/servers") return { ...item, badge: serverCount }
+        if (item.to === "/core") return { ...item, badge: corePending }
+        return item
+      }),
+    [serverCount, corePending],
   )
 
   // On Home view: show compact icon-only sidebar (the Home page has its own

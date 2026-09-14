@@ -46,9 +46,15 @@ describe("agents registry", () => {
     }
   });
 
-  it("should register 28 total coding agents", () => {
+  it("should register 27 total coding agents", () => {
     const keys = Object.keys(agents);
-    assert.equal(keys.length, 28, `Expected 28 agents registered, found ${keys.length}`);
+    assert.equal(keys.length, 27, `Expected 27 agents registered, found ${keys.length}`);
+  });
+
+  it("should no longer expose a `universal` pseudo-agent", () => {
+    // ~/.agents/skills is the core skill set, not a tool you install into.
+    // See packages/cli/src/core/core-skills.ts.
+    assert.equal(agents["universal"], undefined);
   });
 
   it("should safely evaluate detectInstalled without crashing", async () => {

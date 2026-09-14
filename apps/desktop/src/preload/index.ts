@@ -61,6 +61,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
   addToAgent: (skillName: string, canonicalPath: string, agentName: string) =>
     ipcRenderer.invoke("skills:add-to-agent", skillName, canonicalPath, agentName),
 
+  // Core skill set (~/.agents/skills, fanned out to every detected tool)
+  coreInstall: (source: string) => ipcRenderer.invoke("core:install", source),
+  coreSummary: () => ipcRenderer.invoke("core:summary"),
+  coreList: () => ipcRenderer.invoke("core:list"),
+  coreStatus: () => ipcRenderer.invoke("core:status"),
+  corePlan: () => ipcRenderer.invoke("core:plan"),
+  coreSync: () => ipcRenderer.invoke("core:sync"),
+  corePromote: (skillName: string, agentName: string) =>
+    ipcRenderer.invoke("core:promote", skillName, agentName),
+  coreRemove: (skillName: string) => ipcRenderer.invoke("core:remove", skillName),
+  coreSetExclusion: (agentName: string, skillName: string, excluded: boolean) =>
+    ipcRenderer.invoke("core:set-exclusion", agentName, skillName, excluded),
+  coreReplaceConflict: (skillName: string, agentName: string) =>
+    ipcRenderer.invoke("core:replace-conflict", skillName, agentName),
+
   // Remote servers
   serversList: () => ipcRenderer.invoke("servers:list"),
   serversCreate: (data: {

@@ -9,7 +9,7 @@ import {
   uploadSkillDir,
   deleteRemoteSkillDir,
 } from "./ssh.js"
-import { listLocalCanonicalSkills, CANONICAL_SKILLS_DIR } from "./local-skills.js"
+import { listLocalCanonicalSkills } from "./local-skills.js"
 
 export interface PushPlanEntry {
   folderName: string
@@ -183,7 +183,12 @@ export async function applyPush(
   // Uploads (added + updated). Use uploadSkillDir which handles tar pipeline.
   for (const entry of [...preview.toAdd, ...preview.toUpdate]) {
     try {
-      await uploadSkillDir(server, CANONICAL_SKILLS_DIR, entry.folderName, remoteBase)
+      await uploadSkillDir(
+        server,
+        path.dirname(entry.localPath),
+        entry.folderName,
+        remoteBase,
+      )
     } catch (err) {
       errors.push({
         folderName: entry.folderName,

@@ -1,6 +1,5 @@
 import { useMemo, useState, useEffect } from "react"
 import fsPromises from "node:fs/promises"
-import os from "node:os"
 import path from "node:path"
 import fs from "node:fs"
 import { useKeyboard } from "@opentui/react"
@@ -13,9 +12,7 @@ import type { EnrichedSkill } from "../store/types.js"
 import { agents } from "../../../cli/src/core/agents.js"
 import { addSkillToLock } from "../../../cli/src/core/skill-lock.js"
 import { sanitizeName, installSkillForAgent } from "../../../cli/src/core/installer.js"
-
-const home = os.homedir()
-const CANONICAL_SKILLS_DIR = path.join(home, ".agents", "skills")
+import { CANONICAL_SKILLS_DIR } from "../../../cli/src/constants.js"
 
 /**
  * Reads the full SKILL.md content for inline display.
@@ -128,7 +125,7 @@ export function HomeView() {
     if (!name) return
     const description = data.description.trim() || name
     const safeName = sanitizeName(name)
-    const canonicalDir = path.join(CANONICAL_SKILLS_DIR, safeName)
+    const canonicalDir = path.join(CANONICAL_SKILLS_DIR(), safeName)
     const filePath = path.join(canonicalDir, "SKILL.md")
 
     await fsPromises.mkdir(canonicalDir, { recursive: true })

@@ -5,8 +5,7 @@ import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { AgentConfig, AgentType } from "../types.js";
-import { AGENTS_DIR, SKILLS_SUBDIR } from "../constants.js";
+import { AgentConfig } from "../types.js";
 
 const home = os.homedir();
 const configHome = process.env.XDG_CONFIG_HOME || path.join(home, ".config");
@@ -301,15 +300,6 @@ export const agents: Record<string, AgentConfig> = {
     globalSkillsDir: path.join(configHome, "zed", "skills"),
     detectInstalled: async () => dirExists(path.join(configHome, "zed")),
   },
-
-  universal: {
-    name: "universal",
-    displayName: "Universal (.agents/skills)",
-    skillsDir: ".agents/skills",
-    globalSkillsDir: path.join(home, AGENTS_DIR, SKILLS_SUBDIR),
-    detectInstalled: async () => true,
-    showInUniversalList: true,
-  },
 };
 
 // ---------- Detection + Classification ----------
@@ -322,26 +312,4 @@ export async function detectInstalledAgents(): Promise<AgentConfig[]> {
     })),
   );
   return results.filter((r) => r.installed).map((r) => r.agent);
-}
-
-export function getUniversalAgents(): AgentConfig[] {
-  return Object.values(agents).filter(
-    (a) =>
-      a.globalSkillsDir === path.join(home, AGENTS_DIR, SKILLS_SUBDIR),
-  );
-}
-
-export function getNonUniversalAgents(): AgentConfig[] {
-  return Object.values(agents).filter(
-    (a) =>
-      a.globalSkillsDir !== path.join(home, AGENTS_DIR, SKILLS_SUBDIR),
-  );
-}
-
-export function isUniversalAgent(name: AgentType): boolean {
-  const agent = agents[name];
-  return (
-    !!agent &&
-    agent.globalSkillsDir === path.join(home, AGENTS_DIR, SKILLS_SUBDIR)
-  );
 }

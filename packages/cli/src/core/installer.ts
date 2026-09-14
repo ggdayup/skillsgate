@@ -31,7 +31,7 @@ export function isPathSafe(targetPath: string, baseDir: string): boolean {
 // to prevent concurrent installations from deleting each other's work
 const claimedCanonicalDirs = new Set<string>();
 
-async function realpathOrResolve(dir: string): Promise<string> {
+export async function realpathOrResolve(dir: string): Promise<string> {
   try {
     return await fs.realpath(dir);
   } catch {
@@ -117,7 +117,7 @@ export async function installSkillForAgent(
   }
 }
 
-async function writeSkillFiles(
+export async function writeSkillFiles(
   skill: Skill,
   targetDir: string,
   cleanDir: boolean,

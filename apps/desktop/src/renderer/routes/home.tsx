@@ -7,8 +7,9 @@ import {
   useCallback,
   useRef,
   memo,
+  type ReactElement,
 } from "react"
-import { List } from "react-window"
+import { List, type RowComponentProps } from "react-window"
 import { marked } from "marked"
 import { electronAPI } from "../lib/electron-api"
 import { SkillEditor, type SkillEditorHandle } from "../components/skill-editor"
@@ -376,9 +377,15 @@ const MemoizedLeftSidebar = memo(LeftSidebar)
 // Virtualized Skill List Row
 // --------------------------------------------------------------------------
 
-interface SkillRowProps {
-  index: number
-  style: React.CSSProperties
+/**
+ * Shared row data handed to `List` via `rowProps`.
+ *
+ * Deliberately excludes `index` / `style`: those are supplied per row by
+ * react-window itself, and it types `rowProps` as "everything except them"
+ * (`ExcludeForbiddenKeys`). Declaring them here made the list demand them in
+ * `rowProps`, which is what produced the pre-existing type error.
+ */
+interface SkillRowData {
   skills: InstalledSkill[]
   multiSelected: Set<string>
   isMultiSelectActive: boolean
@@ -406,7 +413,7 @@ const SkillListRow = memo(function SkillListRow({
   onToggleFavorite,
   onDragSkillStart,
   onDragSkillEnd,
-}: SkillRowProps) {
+}: RowComponentProps<SkillRowData>) {
   const skill = skills[index]
   if (!skill) return null
   const isMultiChecked = multiSelected.has(skill.canonicalPath)
@@ -492,7 +499,10 @@ const SkillListRow = memo(function SkillListRow({
       </button>
     </div>
   )
-})
+}) as (props: RowComponentProps<SkillRowData>) => ReactElement | null
+// `memo` widens the return type to `ReactNode`, but react-window's
+// `rowComponent` demands `ReactElement | null`. The component does return
+// exactly that, so narrow it once here rather than dropping the memo.
 
 // --------------------------------------------------------------------------
 // Middle Skill List Panel
@@ -955,12 +965,46 @@ function RemoveSkillDialog({ skill, onClose, onRemoveFromAgents, onRemoveAll }: 
 // Right Detail Panel
 // --------------------------------------------------------------------------
 
+/** How far one core skill has fanned out across the detected tools. */
+interface CoreFanoutEntry {
+  linked: number
+  total: number
+  conflicts: number
+  excluded: number
+}
+
+/** Same folder-name normalisation the core engine uses, so names line up. */
+function coreKey(skillName: string): string {
+  return skillName
+    .toLowerCase()
+    .replace(/[^a-z0-9._]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+/** Regroups the read-only core plan by skill. One pass, keyed for lookup. */
+function buildCoreFanout(items: CoreSyncItem[]): Map<string, CoreFanoutEntry> {
+  const map = new Map<string, CoreFanoutEntry>()
+  for (const item of items) {
+    let entry = map.get(item.skill)
+    if (!entry) {
+      entry = { linked: 0, total: 0, conflicts: 0, excluded: 0 }
+      map.set(item.skill, entry)
+    }
+    entry.total += 1
+    if (item.action === "skip-present") entry.linked += 1
+    else if (item.action === "skip-conflict") entry.conflicts += 1
+    else if (item.action === "skip-excluded") entry.excluded += 1
+  }
+  return map
+}
+
 interface RightPanelProps {
   skill: InstalledSkill | null
   content: string | null
   contentLoading: boolean
   supportingFiles: InstalledSkill["supportingFiles"]
   collections: Record<string, string[]>
+  coreFanout: Map<string, CoreFanoutEntry>
   onContentSaved: (newContent: string) => void
   onSkillRemoved: () => void
   onToggleCollection: (collectionName: string, skill: InstalledSkill) => void
@@ -973,11 +1017,13 @@ function RightPanel({
   contentLoading,
   supportingFiles,
   collections,
+  coreFanout,
   onContentSaved,
   onSkillRemoved,
   onToggleCollection,
   onCreateCollection,
 }: RightPanelProps) {
+  const coreEntry = skill ? coreFanout.get(coreKey(skill.name)) : undefined
   const [editMode, setEditMode] = useState(false)
   const [supportingPreview, setSupportingPreview] = useState("")
   const [selectedSupportingFile, setSelectedSupportingFile] = useState<string | null>(null)
@@ -1236,6 +1282,24 @@ function RightPanel({
             <div className="flex items-center gap-1.5">
               <AgentLogoRow agents={skill.agents} size={16} />
             </div>
+            {coreEntry && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
+                  ★ {t("core")} · {coreEntry.linked}/{coreEntry.total}{" "}
+                  {t("fanned out")}
+                </span>
+                {coreEntry.conflicts > 0 && (
+                  <span className="rounded border border-red-200 bg-red-50 px-2 py-0.5 text-red-600">
+                    {coreEntry.conflicts} {t("conflict")}
+                  </span>
+                )}
+                {coreEntry.excluded > 0 && (
+                  <span className="rounded border border-border bg-surface-hover px-2 py-0.5 text-muted">
+                    {coreEntry.excluded} {t("excluded")}
+                  </span>
+                )}
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted">
               <span className="rounded border border-border px-2 py-0.5">
                 scope: {skill.scope}
@@ -1544,6 +1608,9 @@ export function Home() {
   const [collections, setCollections] = useState<Record<string, string[]>>({})
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null)
   const [defaultAgents, setDefaultAgents] = useState<string[]>([])
+  const [coreFanout, setCoreFanout] = useState<Map<string, CoreFanoutEntry>>(
+    new Map(),
+  )
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [dragSkill, setDragSkill] = useState<DragSkillPayload | null>(null)
   const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
@@ -1586,18 +1653,21 @@ export function Home() {
           savedCollections,
           savedDefaultAgents,
           savedFavorites,
+          corePlan,
         ] = await Promise.all([
           electronAPI.detectAgents(),
           electronAPI.listInstalled(),
           electronAPI.settingsGet("collections.skills", {} as Record<string, string[]>),
           electronAPI.settingsGet("install.defaultAgents", [] as string[]),
           electronAPI.favoritesList(),
+          electronAPI.corePlan().catch(() => ({ items: [] as CoreSyncItem[] })),
         ])
         setAgents(detectedAgents)
         setSkills(installedSkills)
         setCollections(savedCollections || {})
         setDefaultAgents(savedDefaultAgents || [])
         setFavorites(new Set(savedFavorites))
+        setCoreFanout(buildCoreFanout(corePlan.items))
       } catch (err) {
         console.error("Failed to load installed skills:", err)
       } finally {
@@ -1611,6 +1681,11 @@ export function Home() {
       contentCacheRef.current.clear()
       supportingFilesCacheRef.current.clear()
       setSkills(updatedSkills)
+      // Fan-out changed too if something was just installed or unlinked.
+      electronAPI
+        .corePlan()
+        .then((plan) => setCoreFanout(buildCoreFanout(plan.items)))
+        .catch(() => undefined)
     })
 
     return cleanup
@@ -1625,8 +1700,13 @@ export function Home() {
       return
     }
 
+    // Bound to a local: the async loader below is a hoisted function
+    // declaration, and narrowing on the outer binding does not survive into
+    // it. `target` is non-null for the whole effect body.
+    const target = selectedSkill
+
     let cancelled = false
-    const cacheKey = selectedSkill.canonicalPath
+    const cacheKey = target.canonicalPath
     const hasCachedContent = contentCacheRef.current.has(cacheKey)
     const cachedContent = contentCacheRef.current.get(cacheKey) ?? null
     const cachedFiles = supportingFilesCacheRef.current.get(cacheKey)
@@ -1646,10 +1726,10 @@ export function Home() {
         const [raw, files] = await Promise.all([
           hasCachedContent
             ? Promise.resolve(cachedContent)
-            : electronAPI.readSkillContent(selectedSkill.path),
+            : electronAPI.readSkillContent(target.path),
           cachedFiles
             ? Promise.resolve(cachedFiles)
-            : electronAPI.listSupportingFiles(selectedSkill.path),
+            : electronAPI.listSupportingFiles(target.path),
         ])
         if (!cancelled) {
           setSkillContent(raw || null)
@@ -2242,6 +2322,7 @@ export function Home() {
         contentLoading={contentLoading}
         supportingFiles={selectedSupportingFiles}
         collections={collections}
+        coreFanout={coreFanout}
         onContentSaved={handleContentSaved}
         onSkillRemoved={handleSkillRemoved}
         onToggleCollection={handleToggleCollection}

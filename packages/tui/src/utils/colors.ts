@@ -48,5 +48,5 @@ export const agentBadges: Record<string, { label: string; color: string }> = {
   workbuddy:        { label: "WB", color: "#07C160" }, // green
   "workbuddy-ai":   { label: "WBA", color: "#10B981" }, // emerald
   mercury:          { label: "MC", color: "#64748B" }, // slate
-  universal:        { label: "U",  color: "#888888" }, // dim
+  core:             { label: "★",  color: "#0F6E56" }, // teal — the core skill set
 }

@@ -12,6 +12,7 @@ import { runWhoami } from "./commands/whoami.js";
 import { runPublish } from "./commands/publish.js";
 import { runScan } from "./commands/scan.js";
 import { runSetup } from "./commands/setup.js";
+import { runCore } from "./commands/core.js";
 
 // "SKILLS" in dark silver (dim), "GATE" in bright white (bold)
 const s = (t: string) => pc.dim(t);       // dark silver
@@ -103,6 +104,11 @@ async function main(): Promise<void> {
       await runSetup(restArgs);
       break;
 
+    case "core":
+    case "c":
+      await runCore(restArgs);
+      break;
+
     case "tui": {
       const { execFileSync } = await import("node:child_process");
       try {
@@ -150,6 +156,9 @@ function printHelp(): void {
   );
   console.log(`    remove ${DIM("[name]")}    Uninstall skills`);
   console.log(`    list               Show installed skills`);
+  console.log(
+    `    core ${DIM("[cmd]")}         Manage the core skill set ${DIM("(~/.agents/skills)")}`,
+  );
   console.log(`    update ${DIM("[name]")}    Check and apply updates`);
   console.log(`    sync               Sync skills from node_modules`);
   console.log(
@@ -182,7 +191,7 @@ function printHelp(): void {
   console.log();
   console.log(`  ${BOLD("Options:")}`);
   console.log(
-    `    -g, --global       Use global scope (~/.agents/skills/)`,
+    `    -g, --global       Use global scope ${DIM("(~/.agents/)")}`,
   );
   console.log(`    -y, --yes          Skip confirmation prompts`);
   console.log(`    -a, --agent <id>   Target specific agent(s)`);

@@ -19,6 +19,9 @@ const ServerSkills = lazy(() =>
 const Settings = lazy(() =>
   import("./routes/settings").then((module) => ({ default: module.Settings })),
 )
+const Core = lazy(() =>
+  import("./routes/core").then((module) => ({ default: module.Core })),
+)
 const ScanSources = lazy(() =>
   import("./routes/scan-sources").then((module) => ({
     default: module.ScanSources,
@@ -55,6 +58,7 @@ export function App() {
               <Route path="/servers" element={<div className="flex-1 overflow-y-auto"><Servers /></div>} />
               <Route path="/servers/:id/skills" element={<ServerSkills />} />
               <Route path="/scan-sources" element={<ScanSources />} />
+              <Route path="/core" element={<div className="flex-1 overflow-y-auto"><Core /></div>} />
               <Route path="/settings" element={<div className="flex-1 overflow-y-auto"><Settings /></div>} />
             </Routes>
           </Suspense>

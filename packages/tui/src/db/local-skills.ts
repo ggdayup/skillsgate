@@ -1,15 +1,17 @@
 // packages/tui/src/db/local-skills.ts
 /**
- * Pure async scanner for local canonical skills under ~/.agents/skills.
+ * Pure async scanner for local skills under the two SkillsGate roots:
+ *   ~/.agents/skills   — the core set
+ *   ~/.agents/.store   — non-core (per-tool) installs
  * Returns the minimal shape needed by the push orchestrator.
  * Does NOT depend on React, the store, or the DB layer.
  */
 import fs from "node:fs/promises"
 import path from "node:path"
-import os from "node:os"
-
-const home = os.homedir()
-export const CANONICAL_SKILLS_DIR = path.join(home, ".agents", "skills")
+import {
+  CANONICAL_SKILLS_DIR,
+  CORE_SKILLS_DIR,
+} from "../../../cli/src/constants.js"
 
 export interface LocalCanonicalSkill {
   folderName: string
@@ -17,22 +19,18 @@ export interface LocalCanonicalSkill {
   name: string
 }
 
-/**
- * List all skill directories under ~/.agents/skills that contain a SKILL.md.
- * Uses the folder name as both folderName and name (SKILL.md name field is
- * parsed by the push orchestrator's hash step, which reads the file again).
- */
-export async function listLocalCanonicalSkills(): Promise<LocalCanonicalSkill[]> {
+async function scanRoot(root: string): Promise<LocalCanonicalSkill[]> {
   const results: LocalCanonicalSkill[] = []
   let names: string[]
   try {
-    names = await fs.readdir(CANONICAL_SKILLS_DIR)
+    names = await fs.readdir(root)
   } catch {
-    return []
+    return results
   }
 
   for (const name of names) {
-    const skillDir = path.join(CANONICAL_SKILLS_DIR, name)
+    if (name.startsWith(".")) continue
+    const skillDir = path.join(root, name)
     let stat: Awaited<ReturnType<typeof fs.stat>>
     try {
       stat = await fs.stat(skillDir)
@@ -54,11 +52,22 @@ export async function listLocalCanonicalSkills(): Promise<LocalCanonicalSkill[]>
     } catch {
       continue // no SKILL.md
     }
-    results.push({
-      folderName: name,
-      canonicalPath,
-      name,
-    })
+    results.push({ folderName: name, canonicalPath, name })
   }
   return results
+}
+
+/**
+ * List every skill directory containing a SKILL.md across the core set and the
+ * non-core store. Core wins on a name collision.
+ */
+export async function listLocalCanonicalSkills(): Promise<LocalCanonicalSkill[]> {
+  const byName = new Map<string, LocalCanonicalSkill>()
+  for (const entry of await scanRoot(CORE_SKILLS_DIR())) {
+    byName.set(entry.folderName, entry)
+  }
+  for (const entry of await scanRoot(CANONICAL_SKILLS_DIR())) {
+    if (!byName.has(entry.folderName)) byName.set(entry.folderName, entry)
+  }
+  return [...byName.values()]
 }

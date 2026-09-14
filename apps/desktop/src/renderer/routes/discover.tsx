@@ -314,11 +314,15 @@ function AgentDropdown({
   selected,
   defaults,
   onToggle,
+  coreSelected,
+  onToggleCore,
 }: {
   agents: DetectedAgent[]
   selected: string[]
   defaults: string[]
   onToggle: (name: string) => void
+  coreSelected: boolean
+  onToggleCore: () => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -333,8 +337,9 @@ function AgentDropdown({
     return () => document.removeEventListener("mousedown", handleClick)
   }, [])
 
-  const label =
-    selected.length === 0
+  const label = coreSelected
+    ? `★ ${t("Core — every tool")}`
+    : selected.length === 0
       ? "No agents selected"
       : selected.length === agents.length
         ? `All agents (${agents.length})`
@@ -368,22 +373,63 @@ function AgentDropdown({
 
       {open && (
         <div className="absolute z-50 mt-1 w-full rounded-lg border border-border bg-background shadow-lg overflow-hidden">
+          {/* Core is pinned because it is not an agent: it is the shared set
+              that gets fanned out into all of them. Selecting it subsumes the
+              per-tool list below, so the tools are disabled while it is on. */}
+          <div className="py-1 border-b border-border">
+            <button
+              type="button"
+              onClick={onToggleCore}
+              className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-foreground hover:bg-surface-hover transition-colors"
+            >
+              <span
+                className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                  coreSelected
+                    ? "bg-accent border-accent text-background"
+                    : "border-border"
+                }`}
+              >
+                {coreSelected && (
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+              </span>
+              <span className="font-medium">★ {t("Core")}</span>
+              <span className="ml-auto text-[10px] text-muted">
+                {t("every tool")}
+              </span>
+            </button>
+          </div>
+
           <div className="max-h-48 overflow-y-auto py-1">
             {agents.map((agent) => (
               <button
                 key={agent.name}
                 type="button"
-                onClick={() => onToggle(agent.name)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-foreground hover:bg-surface-hover transition-colors"
+                disabled={coreSelected}
+                onClick={() => {
+                  if (!coreSelected) onToggle(agent.name)
+                }}
+                title={
+                  coreSelected
+                    ? t("Core already covers every tool")
+                    : undefined
+                }
+                className={`w-full flex items-center gap-2 px-3 py-2 text-[12px] text-foreground transition-colors ${
+                  coreSelected
+                    ? "opacity-40 cursor-not-allowed"
+                    : "hover:bg-surface-hover"
+                }`}
               >
                 <span
                   className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                    selected.includes(agent.name)
+                    selected.includes(agent.name) && !coreSelected
                       ? "bg-accent border-accent text-background"
                       : "border-border"
                   }`}
                 >
-                  {selected.includes(agent.name) && (
+                  {selected.includes(agent.name) && !coreSelected && (
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
@@ -396,6 +442,12 @@ function AgentDropdown({
               </button>
             ))}
           </div>
+
+          {coreSelected && (
+            <p className="px-3 py-2 text-[11px] text-muted border-t border-border">
+              {t("Installed once into ~/.agents/skills, then linked into each tool.")}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -416,6 +468,7 @@ interface DetailPanelProps {
   getCachedContent: (key: string) => string | null | undefined
   cacheContent: (key: string, content: string | null) => void
   onInstall: (source: string, agentNames: string[]) => Promise<void>
+  onInstallCore: (source: string) => Promise<void>
 }
 
 function DetailPanel({
@@ -428,8 +481,10 @@ function DetailPanel({
   getCachedContent,
   cacheContent,
   onInstall,
+  onInstallCore,
 }: DetailPanelProps) {
   const [selectedAgents, setSelectedAgents] = useState<string[]>([])
+  const [useCore, setUseCore] = useState(false)
   const cacheKey = `${skill.source}:${skill.skillId}`
   const [content, setContent] = useState<string | null>(
     getCachedContent(cacheKey) ?? null,
@@ -500,11 +555,13 @@ function DetailPanel({
     console.log("[discover/detail] install clicked", {
       source: skill.source,
       selectedAgents,
+      useCore,
     })
     setInstalling(true)
     setInstallError(null)
     try {
-      await onInstall(skill.source, selectedAgents)
+      if (useCore) await onInstallCore(skill.source)
+      else await onInstall(skill.source, selectedAgents)
       console.log("[discover/detail] install succeeded", {
         source: skill.source,
       })
@@ -589,7 +646,9 @@ function DetailPanel({
               ) : (
                 <button
                   onClick={handleInstall}
-                  disabled={installing || selectedAgents.length === 0}
+                  disabled={
+                    installing || (useCore ? false : selectedAgents.length === 0)
+                  }
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12px] font-medium bg-foreground text-background hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
                   {installing ? (
@@ -615,6 +674,8 @@ function DetailPanel({
                 selected={selectedAgents}
                 defaults={defaultAgents}
                 onToggle={toggleAgent}
+                coreSelected={useCore}
+                onToggleCore={() => setUseCore((v) => !v)}
               />
             )}
 
@@ -824,6 +885,20 @@ export function Discover() {
     updateInstalledState(installed)
   }
 
+  /** Install once into the core set; the fan-out links it into every tool. */
+  async function handleInstallCore(source: string) {
+    console.log("[discover] starting core install", { source })
+    const results = await electronAPI.coreInstall(source)
+    const failed = results.filter((r) => r.error)
+    if (failed.length > 0) {
+      throw new Error(failed.map((r) => `${r.name}: ${r.error}`).join(", "))
+    }
+
+    const installed = await electronAPI.rescanSkills()
+    console.log("[discover] installed skills after core install", installed)
+    updateInstalledState(installed)
+  }
+
   const getCachedContent = useCallback((key: string) => {
     return contentCacheRef.current.get(key)
   }, [])
@@ -1014,6 +1089,7 @@ export function Discover() {
           getCachedContent={getCachedContent}
           cacheContent={cacheContent}
           onInstall={handleInstall}
+          onInstallCore={handleInstallCore}
         />
       )}
     </div>

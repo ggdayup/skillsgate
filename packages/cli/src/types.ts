@@ -28,6 +28,9 @@ export type AgentType =
   | "mercury"
   | "windsurf"
   | "zed"
+  // Retained only so persisted data (e.g. lock `lastSelectedAgents`, caches) that
+  // still references the old pseudo-agent keeps type-checking. It is no longer a
+  // registered agent — `~/.agents/skills` is the core set, not an install target.
   | "universal";
 
 export interface AgentConfig {
@@ -36,7 +39,6 @@ export interface AgentConfig {
   skillsDir: string;
   globalSkillsDir: string;
   detectInstalled: () => Promise<boolean>;
-  showInUniversalList?: boolean;
 }
 
 // ---------- Skill Types ----------
@@ -108,6 +110,64 @@ export interface InstallResult {
   path: string;
   symlinkFailed?: boolean;
   error?: string;
+}
+
+// ---------- Core Skills Types ----------
+
+/** Where a skill's source of truth lives. */
+export type SkillRoot = "core" | "store";
+
+export type CoreSyncAction =
+  | "link" // create the agent-side symlink to a core skill
+  | "unlink" // remove an agent-side symlink whose core skill is gone
+  | "skip-conflict" // agent has a real dir of the same name; never overwrite
+  | "skip-excluded" // agent opted out of this core skill
+  | "skip-present"; // already correctly linked
+
+export interface CoreSyncItem {
+  skill: string;
+  agent: AgentType;
+  displayName: string;
+  action: CoreSyncAction;
+  /** Absolute path of the agent-side entry involved. */
+  path: string;
+  /** Human-readable detail for conflicts/exclusions. */
+  reason?: string;
+}
+
+export interface CoreSyncPlan {
+  items: CoreSyncItem[];
+  /** Agents that were detected and are therefore in scope. */
+  agents: AgentType[];
+  /** Number of skills in the core set. */
+  coreCount: number;
+}
+
+export interface CoreSyncResult {
+  linked: number;
+  unlinked: number;
+  skippedConflicts: number;
+  skippedExcluded: number;
+  alreadyPresent: number;
+  failed: { skill: string; agent: AgentType; error: string }[];
+}
+
+/** Persisted at ~/.agents/core.json — deliberately NOT in .skill-lock.json. */
+export interface CoreConfig {
+  version: number;
+  /** agent id -> core skill names this agent opts out of */
+  exclusions: Record<string, string[]>;
+  storeDir: string;
+}
+
+export interface CoreStatusEntry {
+  agent: AgentType;
+  displayName: string;
+  linked: number;
+  missing: string[];
+  conflicts: string[];
+  excluded: string[];
+  dangling: string[];
 }
 
 // ---------- Publish Types ----------

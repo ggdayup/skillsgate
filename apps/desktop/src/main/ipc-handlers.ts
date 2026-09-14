@@ -2,7 +2,7 @@ import { ipcMain, shell, type BrowserWindow } from "electron"
 import os from "node:os"
 import path from "node:path"
 import fs from "node:fs/promises"
-import { existsSync } from "node:fs"
+import { existsSync, type Dirent } from "node:fs"
 import { execFile, spawn } from "node:child_process"
 import matter from "gray-matter"
 import { app } from "electron"
@@ -21,6 +21,25 @@ import { testConnection, syncRemoteServer, readRemoteFile, writeRemoteFile } fro
 import { planPush, applyPush } from "./db/push"
 import type { PushPreview } from "./db/push"
 import { checkForAppUpdates, getUpdateState, quitAndInstallUpdate } from "./auto-updater"
+import {
+  CANONICAL_SKILLS_DIR,
+  CORE_SKILLS_DIR,
+  SKILL_ROOTS,
+} from "./skill-paths"
+import {
+  applyCoreSync,
+  getCoreStatus,
+  getCoreSummary,
+  installDirToCore,
+  listCoreEntries,
+  planCoreSync,
+  promoteToCore,
+  readCoreConfig,
+  removeCoreSkill,
+  replaceConflictWithCoreLink,
+  setExclusion,
+  type CoreAgent,
+} from "./core-skills"
 
 // ---------------------------------------------------------------------------
 // Agent registry (mirrored from packages/cli/src/core/agents.ts)
@@ -299,14 +318,9 @@ const agentRegistry: Record<string, AgentEntry> = {
     globalSkillsDir: path.join(configHome, "zed", "skills"),
     detectInstalled: () => dirExists(path.join(configHome, "zed")),
   },
-  universal: {
-    name: "universal",
-    displayName: "Universal (.agents/skills)",
-    shortCode: "UA",
-    globalSkillsDir: path.join(home, ".agents", "skills"),
-    detectInstalled: async () => true,
-  },
 }
+// NOTE: the former "universal" pseudo-agent was removed. ~/.agents/skills is now
+// the core skill set (see core-skills), not a tool you install into.
 
 // ---------------------------------------------------------------------------
 // Lock file reading (mirrored from packages/cli/src/core/skill-lock.ts)
@@ -314,7 +328,7 @@ const agentRegistry: Record<string, AgentEntry> = {
 
 const LOCK_FILE_VERSION = 1
 const LOCK_FILE_PATH = path.join(home, ".agents", ".skill-lock.json")
-const CANONICAL_SKILLS_DIR = path.join(home, ".agents", "skills")
+// Skill roots live in ./skill-paths.ts so the core engine can share them.
 
 interface SkillLockEntry {
   source: string
@@ -441,7 +455,7 @@ async function parseSkillMd(filePath: string): Promise<ParsedSkill | null> {
 
 function getScopeForPath(resolvedPath: string): "global" | "project" | "custom" {
   const globalRoots = [
-    CANONICAL_SKILLS_DIR,
+    ...SKILL_ROOTS,
     ...Object.values(agentRegistry).map((agent) => agent.globalSkillsDir),
   ].map((root) => path.resolve(root))
 
@@ -526,7 +540,7 @@ function isSkillPathAllowed(resolvedPath: string): boolean {
     Object.values(agentRegistry).some((agent) =>
       resolvedPath.startsWith(path.resolve(agent.globalSkillsDir)),
     ) ||
-    resolvedPath.startsWith(path.resolve(CANONICAL_SKILLS_DIR))
+    SKILL_ROOTS.some((root) => resolvedPath.startsWith(path.resolve(root)))
   ) {
     return true
   }
@@ -643,7 +657,11 @@ async function collectSkillsFromRoot(
 
   await maybeCollectSkillDir(resolvedRoot, scopeHint)
 
-  let rootEntries: Awaited<ReturnType<typeof fs.readdir>> = []
+  // Annotated as `Dirent[]` rather than
+  // `Awaited<ReturnType<typeof fs.readdir>>`: the latter resolves to
+  // `Dirent<NonSharedBuffer>[]`, which does not accept the `Dirent<string>[]`
+  // that `readdir(..., { withFileTypes: true })` actually returns.
+  let rootEntries: Dirent[] = []
   try {
     rootEntries = await fs.readdir(resolvedRoot, { withFileTypes: true })
   } catch {
@@ -661,7 +679,7 @@ async function collectSkillsFromRoot(
     const projectRoot = path.join(resolvedRoot, entry.name)
     for (const probe of PROJECT_PROBES) {
       const probeDir = path.join(projectRoot, probe.subpath)
-      let entries: Awaited<ReturnType<typeof fs.readdir>> = []
+      let entries: Dirent[] = []
       try {
         entries = await fs.readdir(probeDir, { withFileTypes: true })
       } catch {
@@ -727,11 +745,41 @@ async function detectAgents(): Promise<DetectedAgentInfo[]> {
   }
 }
 
+/**
+ * Core is NOT a tool. It is the shared skill set at ~/.agents/skills that fans
+ * out to every detected tool. It is included in skill listings so that core
+ * skills stay visible in the UI even when no tool links to them yet.
+ */
+const CORE_AGENT_ENTRY: AgentEntry = {
+  name: "core",
+  displayName: "Core",
+  shortCode: "★",
+  globalSkillsDir: CORE_SKILLS_DIR,
+  detectInstalled: async () => true,
+}
+
 async function getDetectedAgentEntries(): Promise<AgentEntry[]> {
+  const detected = await detectAgents()
+  const list = detected
+    .map((agent) => agentRegistry[agent.name])
+    .filter((value): value is AgentEntry => Boolean(value))
+  return [CORE_AGENT_ENTRY, ...list]
+}
+
+/**
+ * Detected tools only — Core is not a fan-out target, it is the source.
+ * Used by the core engine so it never tries to link core into itself.
+ */
+async function getCoreAgents(): Promise<CoreAgent[]> {
   const detected = await detectAgents()
   return detected
     .map((agent) => agentRegistry[agent.name])
     .filter((value): value is AgentEntry => Boolean(value))
+    .map((agent) => ({
+      name: agent.name,
+      displayName: agent.displayName,
+      globalSkillsDir: agent.globalSkillsDir,
+    }))
 }
 
 /** Scan all detected agents for installed skills, merging with lock file data.
@@ -1294,6 +1342,69 @@ async function discoverSkillsInDir(
 }
 
 // ---------------------------------------------------------------------------
+// Resolving a source (owner/repo, GitHub URL, or local path) to skill folders
+// ---------------------------------------------------------------------------
+
+type ResolvedSource = {
+  parsed: NonNullable<ReturnType<typeof parseSource>>
+  skills: Awaited<ReturnType<typeof discoverSkillsInDir>>
+  /** Removes the temp clone, if there was one. Safe to call twice. */
+  cleanup: () => Promise<void>
+}
+
+/**
+ * Shared by the per-agent install and the core install so both validate the
+ * source the same way and neither can leak a temp clone on an early return.
+ */
+async function resolveSourceSkills(
+  source: string,
+): Promise<{ ok: true; value: ResolvedSource } | { ok: false; error: string }> {
+  const parsed = parseSource(source)
+  if (!parsed) {
+    return {
+      ok: false,
+      error: `Could not parse source: "${source}". Expected owner/repo, GitHub URL, or local path.`,
+    }
+  }
+
+  let sourceDir: string
+  let tmpDir: string | null = null
+
+  if (parsed.type === "github") {
+    tmpDir = path.join(os.tmpdir(), `skillsgate-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`)
+    const cloneResult = await gitClone(`${parsed.url}.git`, tmpDir)
+    if (!cloneResult.success) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+      return { ok: false, error: `Clone failed: ${cloneResult.error}` }
+    }
+    sourceDir = tmpDir
+  } else {
+    sourceDir = parsed.url
+  }
+
+  const skills = await discoverSkillsInDir(sourceDir)
+  if (skills.length === 0) {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    }
+    return { ok: false, error: "No SKILL.md files found in source." }
+  }
+
+  return {
+    ok: true,
+    value: {
+      parsed,
+      skills,
+      cleanup: async () => {
+        if (tmpDir) {
+          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+        }
+      },
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Install skill files to an agent directory (symlink with copy fallback)
 // ---------------------------------------------------------------------------
 
@@ -1326,7 +1437,8 @@ async function installSkillToAgent(
       resolvedCanonical === resolvedAgent ||
       realAgentSkillsDir === realCanonicalDir
 
-    // If the agent IS the universal agent or points directly to canonical store, write directly
+    // If the agent's dir IS the store (realpath-equal), write files directly
+    // instead of creating a self-referential symlink.
     if (isCanonicalAgent) {
       // Copy skill files directly to the canonical dir
       await fs.rm(canonicalDir, { recursive: true, force: true }).catch(() => {})
@@ -1655,56 +1767,20 @@ export function registerIpcHandlers(): void {
     ): Promise<
       Array<{ skillName: string; agent: string; success: boolean; error?: string }>
     > => {
-      const parsed = parseSource(source)
-      if (!parsed) {
+      const resolved = await resolveSourceSkills(source)
+      if (!resolved.ok) {
         return [
           {
             skillName: source,
             agent: "unknown",
             success: false,
-            error: `Could not parse source: "${source}". Expected owner/repo, GitHub URL, or local path.`,
+            error: resolved.error,
           },
         ]
       }
 
-      let sourceDir: string
-      let tmpDir: string | null = null
-
-      if (parsed.type === "github") {
-        // Clone repository to temp directory
-        tmpDir = path.join(os.tmpdir(), `skillsgate-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`)
-        const cloneResult = await gitClone(`${parsed.url}.git`, tmpDir)
-        if (!cloneResult.success) {
-          return [
-            {
-              skillName: source,
-              agent: "unknown",
-              success: false,
-              error: `Clone failed: ${cloneResult.error}`,
-            },
-          ]
-        }
-        sourceDir = tmpDir
-      } else {
-        sourceDir = parsed.url
-      }
-
-      // Discover skills in the source
-      const discovered = await discoverSkillsInDir(sourceDir)
-      if (discovered.length === 0) {
-        // Cleanup temp dir
-        if (tmpDir) {
-          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-        }
-        return [
-          {
-            skillName: source,
-            agent: "unknown",
-            success: false,
-            error: "No SKILL.md files found in source.",
-          },
-        ]
-      }
+      const parsed = resolved.value.parsed
+      const discovered = resolved.value.skills
 
       // Determine target agents
       const detected = await detectAgents()
@@ -1754,16 +1830,20 @@ export function registerIpcHandlers(): void {
 
       await writeSkillLock(lock)
 
-      // Cleanup temp dir
-      if (tmpDir) {
-        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-      }
+      await resolved.value.cleanup()
 
       return results
     },
   )
 
   // Search skills.sh from main process (avoids CORS)
+  type CatalogEntry = {
+    id: string
+    skillId: string
+    name: string
+    installs: number
+    source: string
+  }
   ipcMain.handle(
     "skills:search-catalog",
     async (
@@ -1776,7 +1856,12 @@ export function registerIpcHandlers(): void {
       const url = `https://skills.sh/api/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`
       const res = await fetch(url)
       if (!res.ok) throw new Error(`skills.sh search failed (HTTP ${res.status})`)
-      const data = await res.json()
+      // `res.json()` is `unknown`; assert the shape we actually consume so the
+      // response contract is documented in one place.
+      const data = (await res.json()) as {
+        skills?: CatalogEntry[]
+        count?: number
+      }
       return { skills: data.skills ?? [], count: data.count ?? 0 }
     },
   )
@@ -1807,20 +1892,22 @@ export function registerIpcHandlers(): void {
       source: string,
       skillId: string,
     ): Promise<string | null> => {
-      // Resolve default branch
+      // Resolve default branch. Assigning through a local keeps `branch`
+      // provably a `string` afterwards — narrowing does not survive the
+      // try/catch when the assignment happens inside both arms.
       let branch = branchCache.get(source)
       if (!branch) {
+        let resolved = "main"
         try {
           const res = await fetch(`https://api.github.com/repos/${source}`)
           if (res.ok) {
-            const data = await res.json()
-            branch = data.default_branch || "main"
-          } else {
-            branch = "main"
+            const data = (await res.json()) as { default_branch?: string }
+            if (data.default_branch) resolved = data.default_branch
           }
         } catch {
-          branch = "main"
+          // Unresolvable repo — "main" is the fallback.
         }
+        branch = resolved
         branchCache.set(source, branch)
       }
 
@@ -2030,12 +2117,14 @@ Add your skill instructions here.
       }
     }
 
-    // Remove canonical directory
-    const canonicalDir = path.join(CANONICAL_SKILLS_DIR, safeName)
-    try {
-      await fs.rm(canonicalDir, { recursive: true, force: true })
-    } catch {
-      // Best effort
+    // Remove the skill's source-of-truth directory (core or store)
+    for (const root of SKILL_ROOTS) {
+      const dir = path.join(root, safeName)
+      try {
+        await fs.rm(dir, { recursive: true, force: true })
+      } catch {
+        // Best effort
+      }
     }
 
     // Remove from lock file
@@ -2325,7 +2414,11 @@ Add your skill instructions here.
       if (!agent) throw new Error(`Unknown agent: ${agentName}`)
 
       const resolvedCanonical = path.resolve(canonicalPath)
-      if (!resolvedCanonical.startsWith(path.resolve(CANONICAL_SKILLS_DIR))) {
+      if (
+        !SKILL_ROOTS.some((root) =>
+          resolvedCanonical.startsWith(path.resolve(root)),
+        )
+      ) {
         throw new Error("Access denied: canonical path is outside local skill storage")
       }
 
@@ -2333,6 +2426,123 @@ Add your skill instructions here.
       if (!result.success) {
         throw new Error(result.error || "Failed to add skill to target agent")
       }
+    },
+  )
+
+  // -------------------------------------------------------------------------
+  // Core skill set — ~/.agents/skills, symlinked into every detected tool
+  // -------------------------------------------------------------------------
+
+  // Install straight into the core set, then fan out. Used when "Core" is the
+  // chosen install target — it subsumes every tool, so the per-agent path is
+  // skipped entirely rather than run 20 times.
+  ipcMain.handle(
+    "core:install",
+    async (
+      _e,
+      source: string,
+    ): Promise<{ name: string; path: string; error?: string }[]> => {
+      const resolved = await resolveSourceSkills(source)
+      if (!resolved.ok) throw new Error(resolved.error)
+
+      const out: { name: string; path: string; error?: string }[] = []
+      try {
+        for (const skill of resolved.value.skills) {
+          const res = await installDirToCore(
+            path.dirname(skill.filePath),
+            skill.name,
+          )
+          out.push({
+            name: skill.name,
+            path: res.path,
+            error: res.ok ? undefined : res.error,
+          })
+        }
+      } finally {
+        await resolved.value.cleanup()
+      }
+
+      await applyCoreSync(await planCoreSync(await getCoreAgents()))
+      await rescanAndCache().catch(() => undefined)
+      return out
+    },
+  )
+
+  ipcMain.handle("core:summary", async () => getCoreSummary(await getCoreAgents()))
+
+  ipcMain.handle("core:list", async () => {
+    const entries = await listCoreEntries()
+    const cfg = await readCoreConfig()
+    return {
+      coreDir: CORE_SKILLS_DIR,
+      storeDir: CANONICAL_SKILLS_DIR,
+      count: entries.length,
+      skills: entries.map((e) => e.name),
+      exclusions: cfg.exclusions,
+    }
+  })
+
+  ipcMain.handle("core:status", async () => getCoreStatus(await getCoreAgents()))
+
+  ipcMain.handle("core:plan", async () => planCoreSync(await getCoreAgents()))
+
+  ipcMain.handle("core:sync", async () => {
+    const plan = await planCoreSync(await getCoreAgents())
+    const result = await applyCoreSync(plan)
+    await rescanAndCache().catch(() => undefined)
+    return { plan, result }
+  })
+
+  ipcMain.handle("core:promote", async (_e, skillName: string, agentName: string) => {
+    const agent = agentRegistry[agentName]
+    if (!agent) throw new Error(`Unknown agent: ${agentName}`)
+    const res = await promoteToCore(skillName, agent)
+    if (!res.ok) throw new Error(res.error || "Promote failed")
+    await applyCoreSync(await planCoreSync(await getCoreAgents()))
+    await rescanAndCache().catch(() => undefined)
+    return res
+  })
+
+  ipcMain.handle("core:remove", async (_e, skillName: string) => {
+    const res = await removeCoreSkill(skillName, await getCoreAgents())
+    if (!res.ok) throw new Error(res.error || "Remove failed")
+    await rescanAndCache().catch(() => undefined)
+    return res
+  })
+
+  ipcMain.handle(
+    "core:set-exclusion",
+    async (_e, agentName: string, skillName: string, excluded: boolean) => {
+      const cfg = await setExclusion(agentName, skillName, excluded)
+      const agent = agentRegistry[agentName]
+      if (!agent) throw new Error(`Unknown agent: ${agentName}`)
+
+      if (excluded) {
+        // Drop the existing link so the exclusion takes effect immediately.
+        const target = path.join(agent.globalSkillsDir, sanitizeName(skillName))
+        try {
+          const lst = await fs.lstat(target)
+          if (lst.isSymbolicLink()) await fs.unlink(target)
+        } catch {
+          // nothing linked
+        }
+      } else {
+        await applyCoreSync(await planCoreSync(await getCoreAgents()))
+      }
+      await rescanAndCache().catch(() => undefined)
+      return cfg
+    },
+  )
+
+  ipcMain.handle(
+    "core:replace-conflict",
+    async (_e, skillName: string, agentName: string) => {
+      const agent = agentRegistry[agentName]
+      if (!agent) throw new Error(`Unknown agent: ${agentName}`)
+      const res = await replaceConflictWithCoreLink(skillName, agent)
+      if (!res.ok) throw new Error(res.error || "Replace failed")
+      await rescanAndCache().catch(() => undefined)
+      return res
     },
   )
 }

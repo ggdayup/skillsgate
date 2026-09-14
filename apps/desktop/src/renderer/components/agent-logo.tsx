@@ -79,7 +79,6 @@ export const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   "WorkBuddy AI": "workbuddy-ai",
   "Mercury Agent": "mercury",
   Zed: "zed",
-  "Universal (.agents/skills)": "universal",
 }
 
 function hashToColor(str: string): string {

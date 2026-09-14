@@ -96,6 +96,64 @@ declare global {
     message?: string
   }
 
+  // ---- Core skill set (~/.agents/skills) ----
+
+  interface CoreSummary {
+    coreCount: number
+    agents: number
+    inSync: number
+    needsWork: number
+    conflicts: number
+  }
+
+  interface CoreListResult {
+    coreDir: string
+    storeDir: string
+    count: number
+    skills: string[]
+    exclusions: Record<string, string[]>
+  }
+
+  interface CoreSyncItem {
+    skill: string
+    agent: string
+    displayName: string
+    action: "link" | "unlink" | "skip-conflict" | "skip-excluded" | "skip-present"
+    path: string
+    reason?: string
+  }
+
+  interface CoreSyncPlan {
+    items: CoreSyncItem[]
+    agents: string[]
+    coreCount: number
+  }
+
+  interface CoreSyncResult {
+    linked: number
+    unlinked: number
+    skippedConflicts: number
+    skippedExcluded: number
+    alreadyPresent: number
+    failed: { skill: string; agent: string; error: string }[]
+  }
+
+  interface CoreConfig {
+    version: number
+    exclusions: Record<string, string[]>
+    storeDir: string
+  }
+
+  interface CoreStatusEntry {
+    agent: string
+    displayName: string
+    linked: number
+    missing: string[]
+    conflicts: string[]
+    excluded: string[]
+    dangling: string[]
+  }
+
   interface ElectronAPI {
     detectAgents: () => Promise<DetectedAgent[]>
     listInstalled: () => Promise<InstalledSkill[]>
@@ -148,6 +206,31 @@ declare global {
       canonicalPath: string,
       agentName: string,
     ) => Promise<void>
+
+    // Core skill set (~/.agents/skills, fanned out to every detected tool)
+    coreInstall: (
+      source: string,
+    ) => Promise<{ name: string; path: string; error?: string }[]>
+    coreSummary: () => Promise<CoreSummary>
+    coreList: () => Promise<CoreListResult>
+    coreStatus: () => Promise<CoreStatusEntry[]>
+    corePlan: () => Promise<CoreSyncPlan>
+    coreSync: () => Promise<{ plan: CoreSyncPlan; result: CoreSyncResult }>
+    corePromote: (skillName: string, agentName: string) => Promise<{ ok: boolean; path: string }>
+    coreRemove: (skillName: string) => Promise<{
+      ok: boolean
+      unlinked: number
+      residualCopies: string[]
+    }>
+    coreSetExclusion: (
+      agentName: string,
+      skillName: string,
+      excluded: boolean,
+    ) => Promise<CoreConfig>
+    coreReplaceConflict: (
+      skillName: string,
+      agentName: string,
+    ) => Promise<{ ok: boolean; backupPath?: string }>
 
     // Remote servers
     serversList: () => Promise<RemoteServer[]>

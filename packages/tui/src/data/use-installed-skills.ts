@@ -32,11 +32,13 @@ const PROJECT_PROBES = [
   ".trae/skills",
   ".zed/skills",
   ".agents/skills",
+  ".agents/.store",
 ]
 
 function getScopeForPath(resolvedPath: string): "global" | "project" | "custom" {
   const globalRoots = [
     path.join(home, ".agents", "skills"),
+    path.join(home, ".agents", ".store"),
     ...Object.values(agents).map((agent) => agent.globalSkillsDir),
   ].map((root) => path.resolve(root))
 
