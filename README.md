@@ -57,7 +57,9 @@ npm install -g skillsgate
 
 ## Supported Agents
 
-Antigravity, Claude Code, Cline, CodeBuddy, CodeBuddy CN, Codex CLI, Continue, Cursor, Droid CLI, GitHub Copilot, Goose, Junie, Kilo Code, Mercury Agent, OB-1, Amp, OpenClaw, OpenCode, Pear AI, Pi Coding Agent, Roo Code, Trae, Trae CN, Windsurf, WorkBuddy, WorkBuddy AI, Zed, and Universal.
+Antigravity, **Antigravity IDE**, **Antigravity CLI**, Claude Code, Cline, CodeBuddy, CodeBuddy CN, Codex CLI, Continue, Cursor, Droid CLI, GitHub Copilot, Goose, Junie, Kilo Code, Mercury Agent, OB-1, Amp, OpenClaw, OpenCode, Pear AI, Pi Coding Agent, Roo Code, Trae, Trae CN, Windsurf, WorkBuddy, WorkBuddy AI, and Zed.
+
+> Google ships three Antigravity interfaces (the 2.0 app, the IDE, and the `agy` CLI). Each keeps its own skills directory under `~/.gemini/`, so SkillsGate manages them as three separate tools.
 
 ## Features
 

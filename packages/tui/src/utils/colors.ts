@@ -22,7 +22,11 @@ export const colors = {
  */
 export const agentBadges: Record<string, { label: string; color: string }> = {
   "claude-code":    { label: "C",  color: "#FFAA00" }, // amber
-  antigravity:      { label: "AG", color: "#4285F4" }, // blue
+  antigravity:      { label: "AG",  color: "#4285F4" }, // blue
+  // Google ships three Antigravity interfaces; keep the hues close so they read
+  // as one family, but distinct enough to tell apart in a badge row.
+  "antigravity-ide": { label: "AGI", color: "#3367D6" }, // deeper blue
+  "antigravity-cli": { label: "AGC", color: "#5F6368" }, // google gray
   cursor:           { label: "Cu", color: "#5599FF" }, // blue
   codebuddy:        { label: "CB", color: "#0052D9" }, // deep blue
   "codebuddy-cn":   { label: "CBN", color: "#165DFF" }, // bright blue

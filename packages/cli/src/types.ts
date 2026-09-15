@@ -3,6 +3,8 @@
 export type AgentType =
   | "amp"
   | "antigravity"
+  | "antigravity-ide"
+  | "antigravity-cli"
   | "claude-code"
   | "cline"
   | "codebuddy"

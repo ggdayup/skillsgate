@@ -55,11 +55,12 @@ const configHome = process.env.XDG_CONFIG_HOME || path.join(home, ".config")
 const factoryHome = process.env.FACTORY_HOME || path.join(home, ".factory")
 const ob1Home = process.env.OB1_HOME || path.join(home, ".ob1")
 const geminiConfigHome = path.join(home, ".gemini", "config")
-const geminiSkillsHome = path.join(
-  home,
-  ".gemini",
-  existsSync(geminiConfigHome) ? "config/skills" : "skills",
-)
+// Global customization root shared by every Antigravity interface. Only when
+// ~/.gemini/config does not exist yet do we fall back to the product dir —
+// never to ~/.gemini/skills, which belongs to Gemini CLI.
+const geminiSkillsHome = existsSync(geminiConfigHome)
+  ? path.join(geminiConfigHome, "skills")
+  : path.join(home, ".gemini", "antigravity", "skills")
 
 
 interface AgentEntry {
@@ -174,15 +175,37 @@ const agentRegistry: Record<string, AgentEntry> = {
     globalSkillsDir: path.join(home, ".amp", "skills"),
     detectInstalled: () => dirExists(path.join(home, ".amp")),
   },
+  // Mirrors packages/cli/src/core/agents.ts — Google ships three Antigravity
+  // interfaces (CLI / Antigravity 2.0 app / IDE), each with its own state dir
+  // under ~/.gemini/. Keep the two registries in sync.
   antigravity: {
     name: "antigravity",
     displayName: "Antigravity",
     shortCode: "AG",
     globalSkillsDir: geminiSkillsHome,
     detectInstalled: async () =>
-      (await dirExists(path.join(home, ".gemini"))) ||
+      (await dirExists("/Applications/Antigravity.app")) ||
+      (await dirExists(path.join(home, ".gemini", "antigravity"))),
+  },
+  "antigravity-ide": {
+    name: "antigravity-ide",
+    displayName: "Antigravity IDE",
+    shortCode: "AGI",
+    globalSkillsDir: path.join(home, ".gemini", "antigravity-ide", "skills"),
+    detectInstalled: async () =>
+      (await dirExists("/Applications/Antigravity IDE.app")) ||
+      (await dirExists(path.join(home, ".gemini", "antigravity-ide"))),
+  },
+  "antigravity-cli": {
+    name: "antigravity-cli",
+    displayName: "Antigravity CLI",
+    shortCode: "AGC",
+    // `agy` may not be on PATH when the app is launched from Finder/Dock, so
+    // the state dir is the reliable signal.
+    globalSkillsDir: path.join(home, ".gemini", "antigravity-cli", "skills"),
+    detectInstalled: async () =>
       (await commandExists("agy")) ||
-      (await dirExists("/Applications/Antigravity.app")),
+      (await dirExists(path.join(home, ".gemini", "antigravity-cli"))),
   },
   codebuddy: {
     name: "codebuddy",

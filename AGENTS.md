@@ -11,8 +11,8 @@ SkillsGate is a visual AI skill manager for coding agents across Desktop (Electr
 
 ---
 
-## 2. Supported Coding Agent Harnesses (27 Agents)
-SkillsGate provides unified skill discovery and synchronization across 27 agent targets.
+## 2. Supported Coding Agent Harnesses (29 Agents)
+SkillsGate provides unified skill discovery and synchronization across 29 agent targets.
 
 > **Core is not an agent.** `~/.agents/skills` is the shared core skill set that fans out into these tools — see §3. It appears in listings so core skills stay visible, but it is a *source*, never an install target.
 
@@ -35,14 +35,40 @@ SkillsGate provides unified skill discovery and synchronization across 27 agent 
 17. **Roo Code** (`roo-code`)
 18. **Trae** (`trae`)
 19. **Zed** (`zed`)
-20. **Antigravity** (`antigravity`, `AG`, `.gemini/skills`, `~/.gemini/config/skills` or `~/.gemini/skills`)
-21. **CodeBuddy** (`codebuddy`, `CB`, `.codebuddy/skills`, `~/.codebuddy/skills`)
-22. **CodeBuddy CN** (`codebuddy-cn`, `CBN`, `.codebuddy-cn/skills`, `~/.codebuddycn/skills` or `~/.codebuddy-cn/skills`)
-23. **WorkBuddy** (`workbuddy`, `WB`, `.workbuddy/skills`, `~/.workbuddy/skills`)
-24. **WorkBuddy AI** (`workbuddy-ai`, `WBA`, `.workbuddy-ai/skills`, `~/.workbuddy-ai/skills`)
-25. **Trae CN** (`trae-cn`, `TCN`, `.trae-cn/skills`, `~/.trae-cn/skills`)
-26. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
-27. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
+20. **Antigravity** (`antigravity`, `AG`, `.gemini/skills`, `~/.gemini/config/skills`)
+21. **Antigravity IDE** (`antigravity-ide`, `AGI`, `.gemini/skills`, `~/.gemini/antigravity-ide/skills`)
+22. **Antigravity CLI** (`antigravity-cli`, `AGC`, `.gemini/skills`, `~/.gemini/antigravity-cli/skills`)
+23. **CodeBuddy** (`codebuddy`, `CB`, `.codebuddy/skills`, `~/.codebuddy/skills`)
+24. **CodeBuddy CN** (`codebuddy-cn`, `CBN`, `.codebuddy-cn/skills`, `~/.codebuddycn/skills` or `~/.codebuddy-cn/skills`)
+25. **WorkBuddy** (`workbuddy`, `WB`, `.workbuddy/skills`, `~/.workbuddy/skills`)
+26. **WorkBuddy AI** (`workbuddy-ai`, `WBA`, `.workbuddy-ai/skills`, `~/.workbuddy-ai/skills`)
+27. **Trae CN** (`trae-cn`, `TCN`, `.trae-cn/skills`, `~/.trae-cn/skills`)
+28. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
+29. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
+
+#### The three Antigravity interfaces are three separate tools
+Google ships three Antigravity products, all of which can be installed at once, and the
+language_server binary shipped inside each one documents the mapping itself:
+
+> Depending on the interface you are using, the directory name will differ:
+> **CLI**: `antigravity-cli/` · **Antigravity 2.0**: `antigravity/` · **IDE**: `antigravity-ide/`
+
+| Interface | Detect | State dir | `globalSkillsDir` |
+| --- | --- | --- | --- |
+| Antigravity 2.0 (app) | `/Applications/Antigravity.app` | `~/.gemini/antigravity/` | `~/.gemini/config/skills` |
+| Antigravity IDE | `/Applications/Antigravity IDE.app` | `~/.gemini/antigravity-ide/` | `~/.gemini/antigravity-ide/skills` |
+| Antigravity CLI (`agy`) | `agy` on PATH | `~/.gemini/antigravity-cli/` | `~/.gemini/antigravity-cli/skills` |
+
+- The tell is `~/.gemini/<dir>/bin/agentapi`, a script each product writes pointing at its
+  own executable. Do **not** guess from directory mtimes.
+- All three also read the shared global customization root `~/.gemini/config/skills`
+  (confirmed for the CLI by its own log: `skills.go:199 … ~/.gemini/config/skills/…`).
+- ⚠️ **Never use the bare `~/.gemini` directory as a detection signal.** Gemini CLI, Graft
+  and others create it, so it reported "Antigravity installed" on machines that never had
+  Antigravity. Same trap as `~/.gemini/skills` — that is Gemini CLI's dir, not Antigravity's.
+- `/Applications/Antigravity Tools.app` is a third-party app (`com.lbjlaq.antigravity-tools`),
+  **not** Google's. Never map it to an Antigravity entry.
+- `~/.gemini/<dir>/builtin/skills` ships with the product — leave it alone.
 
 ---
 

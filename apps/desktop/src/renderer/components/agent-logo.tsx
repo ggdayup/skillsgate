@@ -28,6 +28,9 @@ const AGENT_LOGOS: Record<string, string> = {
   "ob-1": ob1Logo,
   amp: ampLogo,
   antigravity: antigravityLogo,
+  // Same brand, three products — reuse the Antigravity mark.
+  "antigravity-ide": antigravityLogo,
+  "antigravity-cli": antigravityLogo,
   codebuddy: codebuddyLogo,
   "codebuddy-cn": codebuddyCnLogo,
   opencode: opencodeLogo,
@@ -41,6 +44,8 @@ const AGENT_LOGOS: Record<string, string> = {
 
 const AGENT_LOGO_FILTERS: Record<string, string> = {
   antigravity: "none",
+  "antigravity-ide": "none",
+  "antigravity-cli": "none",
   codebuddy: "none",
   "codebuddy-cn": "none",
   mercury: "none",
@@ -54,6 +59,8 @@ const AGENT_LOGO_FILTERS: Record<string, string> = {
 export const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   "Claude Code": "claude-code",
   Antigravity: "antigravity",
+  "Antigravity IDE": "antigravity-ide",
+  "Antigravity CLI": "antigravity-cli",
   Cursor: "cursor",
   CodeBuddy: "codebuddy",
   "CodeBuddy CN": "codebuddy-cn",

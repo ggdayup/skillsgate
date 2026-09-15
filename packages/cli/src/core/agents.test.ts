@@ -6,6 +6,8 @@ import type { AgentType } from "../types.js";
 describe("agents registry", () => {
   const expectedNewAgents: AgentType[] = [
     "antigravity",
+    "antigravity-ide",
+    "antigravity-cli",
     "codebuddy",
     "codebuddy-cn",
     "workbuddy",
@@ -15,7 +17,7 @@ describe("agents registry", () => {
     "mercury",
   ];
 
-  it("should have all 8 new agents registered", () => {
+  it("should have all 10 new agents registered", () => {
     for (const agentName of expectedNewAgents) {
       assert.ok(
         agents[agentName],
@@ -46,9 +48,24 @@ describe("agents registry", () => {
     }
   });
 
-  it("should register 27 total coding agents", () => {
+  it("should register 29 total coding agents", () => {
     const keys = Object.keys(agents);
-    assert.equal(keys.length, 27, `Expected 27 agents registered, found ${keys.length}`);
+    assert.equal(keys.length, 29, `Expected 29 agents registered, found ${keys.length}`);
+  });
+
+  it("should treat the three Antigravity interfaces as separate tools", () => {
+    // `~/.gemini` alone used to be enough to report "Antigravity installed",
+    // which flagged machines that only ever ran Gemini CLI.
+    const dirs = ["antigravity", "antigravity-ide", "antigravity-cli"].map(
+      (name) => agents[name].globalSkillsDir,
+    );
+    assert.equal(new Set(dirs).size, 3, `Expected 3 distinct skills dirs, got ${dirs.join(", ")}`);
+    for (const name of ["antigravity", "antigravity-ide", "antigravity-cli"]) {
+      assert.ok(
+        agents[name].globalSkillsDir.includes("gemini"),
+        `Agent "${name}" should resolve under ~/.gemini`,
+      );
+    }
   });
 
   it("should no longer expose a `universal` pseudo-agent", () => {

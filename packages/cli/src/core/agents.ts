@@ -12,11 +12,12 @@ const configHome = process.env.XDG_CONFIG_HOME || path.join(home, ".config");
 const factoryHome = process.env.FACTORY_HOME || path.join(home, ".factory");
 const ob1Home = process.env.OB1_HOME || path.join(home, ".ob1");
 const geminiConfigHome = path.join(home, ".gemini", "config");
-const geminiSkillsHome = path.join(
-  home,
-  ".gemini",
-  existsSync(geminiConfigHome) ? "config/skills" : "skills",
-);
+// Global customization root shared by every Antigravity interface. Only when
+// ~/.gemini/config does not exist yet do we fall back to the product dir —
+// never to ~/.gemini/skills, which belongs to Gemini CLI.
+const geminiSkillsHome = existsSync(geminiConfigHome)
+  ? path.join(geminiConfigHome, "skills")
+  : path.join(home, ".gemini", "antigravity", "skills");
 const execFileAsync = promisify(execFile);
 
 async function dirExists(p: string): Promise<boolean> {
@@ -136,15 +137,52 @@ export const agents: Record<string, AgentConfig> = {
     detectInstalled: async () => dirExists(path.join(home, ".amp")),
   },
 
+  // Google ships three Antigravity interfaces and they are genuinely three
+  // different tools, so they get three registry entries instead of one:
+  //
+  //   CLI             -> /Applications/... no app; `agy` on PATH
+  //   Antigravity 2.0 -> /Applications/Antigravity.app
+  //   IDE             -> /Applications/Antigravity IDE.app
+  //
+  // Each writes its own state dir under ~/.gemini/ (documented in the shipped
+  // language_server binary: "CLI: antigravity-cli/ / Antigravity 2.0:
+  // antigravity/ / IDE: antigravity-ide/") and, per the same doc, reads skills
+  // from `skills/` inside that dir. They additionally share the global
+  // customization root ~/.gemini/config/skills, which is why `antigravity`
+  // (the 2.0 app) points there: on most machines that dir is the one the
+  // product actually scans at startup.
+  //
+  // Deliberately NOT a detection signal: the bare `~/.gemini` directory. Plenty
+  // of unrelated tools (Gemini CLI, Graft, …) create it, so it used to report
+  // "Antigravity installed" on machines that never had Antigravity.
   antigravity: {
     name: "antigravity",
     displayName: "Antigravity",
     skillsDir: ".gemini/skills",
     globalSkillsDir: geminiSkillsHome,
     detectInstalled: async () =>
-      (await dirExists(path.join(home, ".gemini"))) ||
+      (await dirExists("/Applications/Antigravity.app")) ||
+      (await dirExists(path.join(home, ".gemini", "antigravity"))),
+  },
+
+  "antigravity-ide": {
+    name: "antigravity-ide",
+    displayName: "Antigravity IDE",
+    skillsDir: ".gemini/skills",
+    globalSkillsDir: path.join(home, ".gemini", "antigravity-ide", "skills"),
+    detectInstalled: async () =>
+      (await dirExists("/Applications/Antigravity IDE.app")) ||
+      (await dirExists(path.join(home, ".gemini", "antigravity-ide"))),
+  },
+
+  "antigravity-cli": {
+    name: "antigravity-cli",
+    displayName: "Antigravity CLI",
+    skillsDir: ".gemini/skills",
+    globalSkillsDir: path.join(home, ".gemini", "antigravity-cli", "skills"),
+    detectInstalled: async () =>
       (await commandExists("agy")) ||
-      (await dirExists("/Applications/Antigravity.app")),
+      (await dirExists(path.join(home, ".gemini", "antigravity-cli"))),
   },
 
   codebuddy: {
