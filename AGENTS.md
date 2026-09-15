@@ -117,6 +117,29 @@ A central, git-tracked directory whose contents are symlinked into **every** det
   - If that fails on file writes, extract manually instead: `rm -rf dist && unzip -q ~/Library/Caches/electron/<zip> -d dist` then `printf 'Electron.app/Contents/MacOS/Electron' > path.txt` (no trailing newline — `index.js` does `path.join(dist, contents)`).
 - **`electron-vite dev` cannot be launched from a sandboxed shell.** Chromium needs to open its own sandbox and write to `~/Library/Application Support/`; under sandboxing it dies with `GPU process isn't usable. Goodbye.` Run it from a normal terminal instead. A successful launch prints `[ipc] registerIpcHandlers initialized`.
 
+### Packaging a macOS release (DMG + zip)
+```bash
+cd apps/desktop
+env -u NODE_OPTIONS npm run package:mac -- --config.mac.notarize=false
+```
+- `env -u NODE_OPTIONS` is required: the agent shell injects a `createWriteStream` shim via `NODE_OPTIONS`, which makes asar packing die with `Brokered file token refused`.
+- `notarize` is a **`mac`** property. `--config.notarize=false` is rejected by electron-builder 26; it must be `--config.mac.notarize=false`.
+- Version bump: `apps/desktop/package.json` **and** `bun.lock`. `package-lock.json` deliberately lags (it still said `0.6.0` at `0.6.1`), so do not try to sync it — `npm install --package-lock-only` rewrites 1000+ unrelated lines.
+- `release/` is gitignored; artifacts are never committed.
+
+⚠️ **electron-builder's own DMG step produces a corrupt bundle under a sandboxed shell.** It mounts the image at `/Volumes/<name>` and rewrites files there; the sandbox renames each modified file to a `.BC.T_*` backup and is then denied the unlink, so the backups strand inside the image. Symptom: `Contents/Info.plist` is *gone*, replaced by a 3740-byte `.BC.T_*`, plus an 8-byte `.BC.T_*` where `PkgInfo` was. Finder says the app "is damaged"; `codesign -dv` reports `bundle format unrecognized`.
+- **`hdiutil verify` still reports VALID** — it only checksums the filesystem, not the bundle. Never use it as the gate.
+- Detect: `hdiutil attach -readonly -nobrowse -mountpoint /tmp/x release/SkillsGate-<ver>-arm64.dmg`, then confirm `Info.plist` + `PkgInfo` exist and `find /tmp/x -name ".BC.T_*"` returns 0.
+- Fix: the pre-dmg app dir `release/mac-arm64/SkillsGate.app` is **intact** (corruption only happens inside the mounted volume), so rebuild the image from it — needs sandbox bypass:
+  ```bash
+  hdiutil create -srcfolder release/mac-arm64 -volname "SkillsGate <ver>-arm64" -format UDZO -o release/SkillsGate-<ver>-arm64.dmg
+  ```
+- Then re-sync the manifest: patch the dmg `sha512` + `size` in `release/latest-mac.yml` (`openssl dgst -sha512 -binary <dmg> | openssl base64 -A`) and regenerate the blockmap with `node_modules/app-builder-bin/mac/app-builder_arm64 blockmap --input <dmg> --output <dmg>.blockmap`. Note the binary is `app-builder_arm64`, not `app-builder`.
+- The `.zip` target is built from the app dir and is **unaffected**, and `path:` in `latest-mac.yml` points at the zip — so auto-update keeps working even when the dmg is broken.
+- Signing is ad-hoc and unnotarized: first launch needs right-click → Open, or `xattr -cr /Applications/SkillsGate.app`.
+- Verify the shipped code actually contains your change — the packaged `app.asar` is the source of truth:
+  `python3 -c "d=open('release/mac-arm64/SkillsGate.app/Contents/Resources/app.asar','rb').read(); print(d.count(b'<new symbol>'))"`
+
 ### Running the CLI test suite
 - **Use the package script**: `cd packages/cli && bun run test` (which is `tsx --test 'src/core/*.test.ts'`).
 - **Do not run bare `bun test`.** With bun 1.2.7 it fails *every* file with `Failed to get caller source origin` (a bun × `node:test` interop bug), even when all assertions would pass. It looks like a real failure and is not one.
