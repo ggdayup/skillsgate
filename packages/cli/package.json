@@ -55,6 +55,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@skillsgate/skill-sources": "*",
     "@types/node": "22.19.11",
     "tsup": "8.5.1",
     "tsx": "4.21.0",

@@ -1,6 +1,6 @@
 {
   "name": "@skillsgate/desktop",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "SkillsGate desktop app for managing AI agent skills",
   "author": "Sultan Valiyev <valiyevsultan@gmail.com>",
   "homepage": "https://skillsgate.ai",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "4.0.3",
+    "@skillsgate/skill-sources": "*",
     "@tailwindcss/postcss": "4.2.2",
     "@types/better-sqlite3": "7.6.13",
     "@types/react": "19.2.13",

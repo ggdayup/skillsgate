@@ -3,8 +3,20 @@ import os from "node:os"
 import path from "node:path"
 import fs from "node:fs/promises"
 import { existsSync, type Dirent } from "node:fs"
-import { execFile, spawn } from "node:child_process"
+import { execFile } from "node:child_process"
 import matter from "gray-matter"
+// The source-descriptor layer is *shared* with the CLI via a workspace package
+// rather than mirrored, because the two hand-copies had already drifted: the
+// desktop's understood only `github` + `local` and silently rejected the
+// `@skill` suffixes and `tree/<ref>/<path>` URLs the CLI accepted. Bundled into
+// the main chunk by electron-vite (see the `externalizeDepsPlugin` exclusion in
+// electron-vite.config.ts) — deliberately not a runtime require, which would
+// fail because this package is ESM while the main process is CJS.
+import {
+  parseSource as parseSharedSource,
+  tryParseInstallCommand,
+  type ParsedSource as SharedParsedSource,
+} from "@skillsgate/skill-sources"
 import { app } from "electron"
 import { openDb } from "./db/index"
 import { SettingsStore } from "./db/settings"
@@ -206,6 +218,21 @@ const agentRegistry: Record<string, AgentEntry> = {
     detectInstalled: async () =>
       (await commandExists("agy")) ||
       (await dirExists(path.join(home, ".gemini", "antigravity-cli"))),
+  },
+  // Gemini CLI (google-gemini/gemini-cli) — a *different* Google product that
+  // happens to share ~/.gemini with the Antigravity family. Its own bundle
+  // spells the layout out (`Global -> ~/.gemini/skills`, "available in all
+  // projects"), and none of the Antigravity language servers reference
+  // `.gemini/skills` at all — they use `.gemini/config/`. So this path is
+  // unambiguously Gemini CLI's and must not be folded into an Antigravity entry.
+  "gemini-cli": {
+    name: "gemini-cli",
+    displayName: "Gemini CLI",
+    shortCode: "GEM",
+    globalSkillsDir: path.join(home, ".gemini", "skills"),
+    detectInstalled: async () =>
+      (await commandExists("gemini")) ||
+      (await dirExists(path.join(home, ".gemini", "skills"))),
   },
   codebuddy: {
     name: "codebuddy",
@@ -1249,73 +1276,22 @@ function gitClone(
 }
 
 // ---------------------------------------------------------------------------
-// Source parser (mirrored from packages/cli/src/core/source-parser.ts)
+// Source parser
+//
+// The real implementation lives in `@skillsgate/skill-sources`, shared with the
+// CLI. This adapter exists only because the two call sites below treat an
+// unparseable source as `null`, whereas the shared parser throws
+// `SourceParseError` with a descriptive message.
 // ---------------------------------------------------------------------------
 
-interface ParsedSource {
-  type: "github" | "local"
-  owner: string
-  repo: string
-  url: string
-  subpath?: string
-  ref?: string
-}
+type ParsedSource = SharedParsedSource
 
 function parseSource(source: string): ParsedSource | null {
-  // GitHub URL
-  if (
-    source.startsWith("https://github.com/") ||
-    source.startsWith("github.com/")
-  ) {
-    let url = source
-    if (url.startsWith("github.com/")) url = `https://${url}`
-    try {
-      const parsed = new URL(url)
-      const parts = parsed.pathname.split("/").filter(Boolean)
-      if (parts.length < 2) return null
-      return {
-        type: "github",
-        owner: parts[0],
-        repo: parts[1],
-        url: `https://github.com/${parts[0]}/${parts[1]}`,
-      }
-    } catch {
-      return null
-    }
+  try {
+    return parseSharedSource(source)
+  } catch {
+    return null
   }
-
-  // owner/repo shorthand
-  const match = source.match(/^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)$/)
-  if (match) {
-    return {
-      type: "github",
-      owner: match[1],
-      repo: match[2],
-      url: `https://github.com/${match[1]}/${match[2]}`,
-    }
-  }
-
-  // Local path
-  if (
-    source.startsWith("./") ||
-    source.startsWith("../") ||
-    source.startsWith("/") ||
-    source.startsWith("~/")
-  ) {
-    let resolved = source
-    if (resolved.startsWith("~/")) {
-      resolved = path.join(home, resolved.slice(2))
-    }
-    resolved = path.resolve(resolved)
-    return {
-      type: "local",
-      owner: "",
-      repo: path.basename(resolved),
-      url: resolved,
-    }
-  }
-
-  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -1378,9 +1354,14 @@ type ResolvedSource = {
 /**
  * Shared by the per-agent install and the core install so both validate the
  * source the same way and neither can leak a temp clone on an early return.
+ *
+ * `skillFilter` carries the `--skill` values from a pasted install command.
+ * Empty and `["*"]` both mean "everything the source contains"; matching is
+ * case-insensitive, consistent with the CLI's `filterSkills()`.
  */
 async function resolveSourceSkills(
   source: string,
+  skillFilter: string[] = [],
 ): Promise<{ ok: true; value: ResolvedSource } | { ok: false; error: string }> {
   const parsed = parseSource(source)
   if (!parsed) {
@@ -1405,12 +1386,31 @@ async function resolveSourceSkills(
     sourceDir = parsed.url
   }
 
-  const skills = await discoverSkillsInDir(sourceDir)
+  const discovered = await discoverSkillsInDir(sourceDir)
+
+  const wanted = new Set(
+    skillFilter
+      .filter((name) => name !== "*")
+      .map((name) => name.toLowerCase()),
+  )
+  const skills =
+    wanted.size === 0
+      ? discovered
+      : discovered.filter((skill) => wanted.has(skill.name.toLowerCase()))
+
   if (skills.length === 0) {
     if (tmpDir) {
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
     }
-    return { ok: false, error: "No SKILL.md files found in source." }
+    return {
+      ok: false,
+      error:
+        discovered.length === 0
+          ? "No SKILL.md files found in source."
+          : `No skill named ${skillFilter.join(", ")} in this source. Available: ${discovered
+              .map((skill) => skill.name)
+              .join(", ")}.`,
+    }
   }
 
   return {
@@ -1624,83 +1624,6 @@ function buildCliEnv(): NodeJS.ProcessEnv {
   }
 }
 
-function execFileAsync(
-  file: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { env }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(stderr || error.message))
-        return
-      }
-      resolve({ stdout, stderr })
-    })
-  })
-}
-
-async function resolveNpxPath(): Promise<string> {
-  const env = buildCliEnv()
-  const isWindows = process.platform === "win32"
-
-  try {
-    const { stdout } = isWindows
-      ? await execFileAsync("where.exe", ["npx"], env)
-      : await execFileAsync(process.env.SHELL || "/bin/sh", ["-lc", "command -v npx"], env)
-    const lines = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-    const resolved = isWindows
-      ? lines.find((line) => /\.cmd$/i.test(line)) ?? lines[0]
-      : lines.at(-1)
-    if (resolved) {
-      return await fs.realpath(resolved).catch(() => resolved)
-    }
-  } catch (error) {
-    console.error("[skills:install-via-cli] failed to resolve npx via system shell:", error)
-  }
-
-  const candidatePaths = isWindows
-    ? COMMON_BIN_DIRS.flatMap((dir) => [
-        path.join(dir, "npx.cmd"),
-        path.join(dir, "npx.exe"),
-      ])
-    : ["/opt/homebrew/bin/npx", "/usr/local/bin/npx", "/usr/bin/npx", "/bin/npx"]
-
-  for (const candidate of candidatePaths) {
-    try {
-      await fs.access(candidate)
-      return await fs.realpath(candidate).catch(() => candidate)
-    } catch {
-      continue
-    }
-  }
-
-  throw new Error(
-    `Unable to locate npx. PATH=${env.PATH || "<empty>"} platform=${process.platform}`,
-  )
-}
-
-function quoteWindowsCmdArg(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`
-}
-
-function buildNpxInstallCommand(
-  npxPath: string,
-  safeSource: string,
-): { command: string; args: string[] } {
-  const args = ["skills", "add", safeSource, "--all", "--global", "-y"]
-
-  if (process.platform !== "win32") {
-    return { command: npxPath, args }
-  }
-
-  const quotedCommand = [npxPath, ...args].map(quoteWindowsCmdArg).join(" ")
-  return {
-    command: process.env.ComSpec || "cmd.exe",
-    args: ["/d", "/s", "/c", `"${quotedCommand}"`],
-  }
-}
-
 export function registerIpcHandlers(): void {
   console.log("[ipc] registerIpcHandlers initialized")
   // Detect which agents are installed on this machine
@@ -1787,10 +1710,11 @@ export function registerIpcHandlers(): void {
       source: string,
       agentNames: string[],
       _scope: string,
+      skillFilter: string[] = [],
     ): Promise<
       Array<{ skillName: string; agent: string; success: boolean; error?: string }>
     > => {
-      const resolved = await resolveSourceSkills(source)
+      const resolved = await resolveSourceSkills(source, skillFilter)
       if (!resolved.ok) {
         return [
           {
@@ -1856,6 +1780,65 @@ export function registerIpcHandlers(): void {
       await resolved.value.cleanup()
 
       return results
+    },
+  )
+
+  // Parse + resolve a source without installing anything, so the renderer can
+  // preview a pasted `npx skills add …` command before committing to it.
+  //
+  // Parsing lives in the main process rather than the renderer because the
+  // shared parser reaches for `node:path`/`node:os` when it meets a local
+  // source, and the renderer's browser bundle has neither. The renderer only
+  // ever sees the plain-data summary below.
+  ipcMain.handle(
+    "skills:resolve-source",
+    async (_event, input: string): Promise<ResolvedSourcePreview> => {
+      const blank = (): ResolvedSourcePreview => ({
+        ok: false,
+        wasCommand: false,
+        label: "",
+        skills: [],
+        requestedSkills: [],
+        requestedAgents: [],
+        ignoredFlags: [],
+        extraSources: [],
+        extraLines: [],
+      })
+
+      const parsed = tryParseInstallCommand(input)
+      if (!parsed.ok) {
+        return { ...blank(), error: parsed.error }
+      }
+
+      const command = parsed.value
+      const source =
+        command.source.type === "local"
+          ? command.source.localPath!
+          : `${command.source.owner}/${command.source.repo}`
+
+      const resolved = await resolveSourceSkills(source, command.skillFilter)
+      if (!resolved.ok) {
+        return { ...blank(), wasCommand: command.wasCommand, label: source, error: resolved.error }
+      }
+
+      try {
+        return {
+          ok: true,
+          wasCommand: command.wasCommand,
+          label: source,
+          skills: resolved.value.skills.map((skill) => ({
+            name: skill.name,
+            description: skill.description ?? "",
+          })),
+          requestedSkills: command.skillFilter,
+          requestedAgents: command.agents,
+          ignoredFlags: command.ignoredFlags,
+          extraSources: command.extraSources,
+          extraLines: command.extraLines,
+        }
+      } finally {
+        await resolved.value.cleanup()
+      }
     },
   )
 
@@ -1951,110 +1934,6 @@ export function registerIpcHandlers(): void {
         }
       }
       return null
-    },
-  )
-
-  // Install a skill using the `npx skills add` CLI command
-  ipcMain.handle(
-    "skills:install-via-cli",
-    async (
-      _event,
-      source: string,
-    ): Promise<{ success: boolean; output: string; error?: string }> => {
-      const safeSource = source.replace(/[^a-zA-Z0-9_./-]/g, "")
-      const env = buildCliEnv()
-      console.log("[skills:install-via-cli] request received", {
-        source,
-        safeSource,
-        platform: process.platform,
-        shell: process.env.SHELL || process.env.ComSpec || "<none>",
-        path: env.PATH,
-      })
-
-      try {
-        const npxPath = await resolveNpxPath()
-        console.log("[skills:install-via-cli] resolved npx", npxPath)
-
-        return await new Promise((resolve) => {
-          const { command, args } = buildNpxInstallCommand(npxPath, safeSource)
-          const child = spawn(command, args, {
-            cwd: os.homedir(),
-            env,
-            stdio: ["ignore", "pipe", "pipe"],
-            windowsVerbatimArguments: process.platform === "win32",
-          })
-
-          let stdout = ""
-          let stderr = ""
-          let timedOut = false
-          const timeout = setTimeout(() => {
-            timedOut = true
-            console.error("[skills:install-via-cli] timed out after 120000ms")
-            child.kill("SIGTERM")
-          }, 120_000)
-
-          child.stdout.on("data", (chunk) => {
-            const text = chunk.toString()
-            stdout += text
-            console.log("[skills:install-via-cli][stdout]", text.trimEnd())
-          })
-
-          child.stderr.on("data", (chunk) => {
-            const text = chunk.toString()
-            stderr += text
-            console.error("[skills:install-via-cli][stderr]", text.trimEnd())
-          })
-
-          child.on("error", (error) => {
-            clearTimeout(timeout)
-            console.error("[skills:install-via-cli] spawn error:", error)
-            resolve({
-              success: false,
-              output: stdout,
-              error: error.message,
-            })
-          })
-
-          child.on("close", async (code, signal) => {
-            clearTimeout(timeout)
-            console.log("[skills:install-via-cli] process closed", { code, signal, timedOut })
-            if (code === 0 && !timedOut) {
-              try {
-                await rescanAndCache()
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error)
-                console.error("[skills:install-via-cli] rescan failed after successful install:", message)
-                resolve({
-                  success: false,
-                  output: stdout,
-                  error: `Install completed but refresh failed: ${message}`,
-                })
-                return
-              }
-
-              resolve({
-                success: true,
-                output: stdout,
-              })
-              return
-            }
-
-            resolve({
-              success: false,
-              output: stdout,
-              error: stderr || `Install exited with code ${code ?? "unknown"}${signal ? ` (signal ${signal})` : ""}`,
-            })
-          })
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error("[skills:install-via-cli] setup failed:", message)
-        return {
-          success: false,
-          output: "",
-          error: message,
-        }
-      }
     },
   )
 
@@ -2464,8 +2343,9 @@ Add your skill instructions here.
     async (
       _e,
       source: string,
+      skillFilter: string[] = [],
     ): Promise<{ name: string; path: string; error?: string }[]> => {
-      const resolved = await resolveSourceSkills(source)
+      const resolved = await resolveSourceSkills(source, skillFilter)
       if (!resolved.ok) throw new Error(resolved.error)
 
       const out: { name: string; path: string; error?: string }[] = []

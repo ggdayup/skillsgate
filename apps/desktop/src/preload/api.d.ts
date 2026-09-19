@@ -154,6 +154,34 @@ declare global {
     dangling: string[]
   }
 
+  /**
+   * Result of resolving a source *without* installing it — lets the paste flow
+   * show what a command would install before anything touches disk.
+   *
+   * Parsing happens in the main process: the shared parser reaches for
+   * `node:path`/`node:os` for local sources, so it cannot be bundled into the
+   * renderer. The renderer only ever sees this plain-data summary.
+   */
+  interface ResolvedSourcePreview {
+    ok: boolean
+    error?: string
+    /** True when the input was recognized as a `skills add` invocation. */
+    wasCommand: boolean
+    /** `owner/repo` for GitHub sources, or the absolute path for local ones. */
+    label: string
+    skills: { name: string; description: string }[]
+    /** Skill names the command asked for. Empty means "everything found". */
+    requestedSkills: string[]
+    /** Agent slugs the command asked for, already mapped to SkillsGate names. */
+    requestedAgents: string[]
+    /** Flags we recognized but deliberately do not act on. */
+    ignoredFlags: string[]
+    /** Extra sources in the same command; SkillsGate installs one at a time. */
+    extraSources: string[]
+    /** Additional pasted lines beyond the first. Surfaced, never parsed. */
+    extraLines: string[]
+  }
+
   interface ElectronAPI {
     detectAgents: () => Promise<DetectedAgent[]>
     listInstalled: () => Promise<InstalledSkill[]>
@@ -162,10 +190,12 @@ declare global {
       source: string,
       agents: string[],
       scope: string,
+      skillFilter?: string[],
     ) => Promise<InstallResult[]>
-    installSkillViaCli: (
+    resolveSource: (
       source: string,
-    ) => Promise<{ success: boolean; output: string; error?: string }>
+      skillFilter?: string[],
+    ) => Promise<ResolvedSourcePreview>
     searchCatalog: (
       query: string,
       limit?: number,
@@ -210,6 +240,7 @@ declare global {
     // Core skill set (~/.agents/skills, fanned out to every detected tool)
     coreInstall: (
       source: string,
+      skillFilter?: string[],
     ) => Promise<{ name: string; path: string; error?: string }[]>
     coreSummary: () => Promise<CoreSummary>
     coreList: () => Promise<CoreListResult>

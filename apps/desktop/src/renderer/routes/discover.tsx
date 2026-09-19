@@ -10,6 +10,18 @@ import {
 } from "react"
 import { marked } from "marked"
 import { electronAPI } from "../lib/electron-api"
+import { CommandChip, InstallFromCommand } from "../components/install-from-command"
+
+/**
+ * Cheap client-side hint that the search box holds a pasted install command.
+ *
+ * This only decides whether to *offer* the install panel — it is never trusted
+ * as the real parse. The main process re-parses the string authoritatively
+ * (`skills:resolve-source`), so a false positive here merely shows a panel that
+ * reports it could not resolve the input.
+ */
+const INSTALL_COMMAND_HINT =
+  /(?:^|\s)(?:(?:npx|bunx|pnpm|yarn|npm|bun|deno)\s+(?:dlx\s+)?)?skills(?:@\S+)?\s+(?:add|a|install|i)(?:\s|$)/i
 
 // ---------------------------------------------------------------------------
 // Types matching the skills.sh response shape
@@ -663,9 +675,7 @@ function DetailPanel({
                 </button>
               )}
 
-              <code className="text-[11px] font-mono text-muted bg-surface px-2.5 py-1.5 rounded border border-border">
-                $ npx skills add {skill.source}
-              </code>
+              <CommandChip source={skill.source} />
             </div>
 
             {!installed && availableAgents.length > 0 && (
@@ -899,6 +909,17 @@ export function Discover() {
     updateInstalledState(installed)
   }
 
+  /** Refresh the installed-skill index after an install from either path. */
+  async function refreshInstalled() {
+    const installed = await electronAPI.rescanSkills()
+    updateInstalledState(installed)
+  }
+
+  // The search box doubles as a paste target for `npx skills add …` commands.
+  // Uses the live `searchQuery`, not the deferred value, so the panel appears
+  // the moment the command is pasted.
+  const isInstallCommand = INSTALL_COMMAND_HINT.test(searchQuery)
+
   const getCachedContent = useCallback((key: string) => {
     return contentCacheRef.current.get(key)
   }, [])
@@ -984,23 +1005,29 @@ export function Discover() {
         <div className="mt-3 flex items-center justify-between max-w-xl">
           <div className="flex items-center gap-2">
             <span className="text-[11px] uppercase tracking-wider font-medium text-muted">
-              {isSearching ? "Results" : "Trending"}
+              {isInstallCommand
+                ? "Install command"
+                : isSearching
+                  ? "Results"
+                  : "Trending"}
             </span>
-            {isSearching && (
+            {isSearching && !isInstallCommand && (
               <span className="text-[11px] text-muted font-mono">
                 {visibleSkills.length} for "{trimmedQuery}"
               </span>
             )}
           </div>
-          <label className="flex items-center gap-1.5 text-[11px] text-muted hover:text-foreground transition-colors cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={officialOnly}
-              onChange={(e) => setOfficialOnly(e.target.checked)}
-              className="h-3 w-3 accent-blue-500"
-            />
-            {t("Official only")}
-          </label>
+          {!isInstallCommand && (
+            <label className="flex items-center gap-1.5 text-[11px] text-muted hover:text-foreground transition-colors cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={officialOnly}
+                onChange={(e) => setOfficialOnly(e.target.checked)}
+                className="h-3 w-3 accent-blue-500"
+              />
+              {t("Official only")}
+            </label>
+          )}
         </div>
       </div>
 
@@ -1011,9 +1038,15 @@ export function Discover() {
         </div>
       )}
 
-      {/* Grid */}
+      {/* Grid — replaced by the paste panel when the box holds a command */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-8 pb-8">
-        {!isSearching && isLoadingTrending && visibleSkills.length === 0 ? (
+        {isInstallCommand ? (
+          <InstallFromCommand
+            input={searchQuery}
+            onInstalled={refreshInstalled}
+            onDismiss={() => handleSearchChange("")}
+          />
+        ) : !isSearching && isLoadingTrending && visibleSkills.length === 0 ? (
           <div className="flex items-center justify-center py-20">
             <div className="text-center">
               <SpinnerIcon />

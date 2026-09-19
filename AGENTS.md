@@ -11,8 +11,8 @@ SkillsGate is a visual AI skill manager for coding agents across Desktop (Electr
 
 ---
 
-## 2. Supported Coding Agent Harnesses (29 Agents)
-SkillsGate provides unified skill discovery and synchronization across 29 agent targets.
+## 2. Supported Coding Agent Harnesses (30 Agents)
+SkillsGate provides unified skill discovery and synchronization across 30 agent targets.
 
 > **Core is not an agent.** `~/.agents/skills` is the shared core skill set that fans out into these tools — see §3. It appears in listings so core skills stay visible, but it is a *source*, never an install target.
 
@@ -38,13 +38,14 @@ SkillsGate provides unified skill discovery and synchronization across 29 agent 
 20. **Antigravity** (`antigravity`, `AG`, `.gemini/skills`, `~/.gemini/config/skills`)
 21. **Antigravity IDE** (`antigravity-ide`, `AGI`, `.gemini/skills`, `~/.gemini/antigravity-ide/skills`)
 22. **Antigravity CLI** (`antigravity-cli`, `AGC`, `.gemini/skills`, `~/.gemini/antigravity-cli/skills`)
-23. **CodeBuddy** (`codebuddy`, `CB`, `.codebuddy/skills`, `~/.codebuddy/skills`)
-24. **CodeBuddy CN** (`codebuddy-cn`, `CBN`, `.codebuddy-cn/skills`, `~/.codebuddycn/skills` or `~/.codebuddy-cn/skills`)
-25. **WorkBuddy** (`workbuddy`, `WB`, `.workbuddy/skills`, `~/.workbuddy/skills`)
-26. **WorkBuddy AI** (`workbuddy-ai`, `WBA`, `.workbuddy-ai/skills`, `~/.workbuddy-ai/skills`)
-27. **Trae CN** (`trae-cn`, `TCN`, `.trae-cn/skills`, `~/.trae-cn/skills`)
-28. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
-29. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
+23. **Gemini CLI** (`gemini-cli`, `GEM`, `.gemini/skills`, `~/.gemini/skills`)
+24. **CodeBuddy** (`codebuddy`, `CB`, `.codebuddy/skills`, `~/.codebuddy/skills`)
+25. **CodeBuddy CN** (`codebuddy-cn`, `CBN`, `.codebuddy-cn/skills`, `~/.codebuddycn/skills` or `~/.codebuddy-cn/skills`)
+26. **WorkBuddy** (`workbuddy`, `WB`, `.workbuddy/skills`, `~/.workbuddy/skills`)
+27. **WorkBuddy AI** (`workbuddy-ai`, `WBA`, `.workbuddy-ai/skills`, `~/.workbuddy-ai/skills`)
+28. **Trae CN** (`trae-cn`, `TCN`, `.trae-cn/skills`, `~/.trae-cn/skills`)
+29. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
+30. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
 
 #### The three Antigravity interfaces are three separate tools
 Google ships three Antigravity products, all of which can be installed at once, and the
@@ -69,6 +70,23 @@ language_server binary shipped inside each one documents the mapping itself:
 - `/Applications/Antigravity Tools.app` is a third-party app (`com.lbjlaq.antigravity-tools`),
   **not** Google's. Never map it to an Antigravity entry.
 - `~/.gemini/<dir>/builtin/skills` ships with the product — leave it alone.
+
+#### `~/.gemini` is shared by four products, and only one path is Gemini CLI's
+
+Google ships **Gemini CLI** (`google-gemini/gemini-cli`) as a *separate* product from the
+Antigravity family, and both live under `~/.gemini`. The two must never be conflated:
+
+| Product | Global skills dir | Evidence |
+| --- | --- | --- |
+| Gemini CLI | `~/.gemini/skills` | its bundle documents `Global → ~/.gemini/skills` ("available in all projects") and `Project → .gemini/skills` |
+| Antigravity (2.0 / IDE / CLI) | `~/.gemini/config/skills` + `~/.gemini/<product>/skills` | `language_server` references `.gemini/config/` 13/5/17 times respectively and `.gemini/skills` **zero** times |
+
+- `~/.gemini/skills` belongs to **Gemini CLI** (`gemini-cli`, short code `GEM`). It is *not* an
+  Antigravity directory, and `gemini-cli` must not share a `globalSkillsDir` with any Antigravity
+  entry — pinned by `packages/cli/src/core/agents.test.ts`.
+- Detection: `gemini` on PATH, or `~/.gemini/skills` existing. Never the bare `~/.gemini` dir.
+- Gemini CLI also reads `<workspace>/.gemini/skills` per project; SkillsGate only manages the
+  global path, consistent with every other harness.
 
 ---
 
@@ -152,6 +170,104 @@ env -u NODE_OPTIONS npm run package:mac -- --config.mac.notarize=false
 ### react-window row components
 - `rowComponent` is typed `(props) => ReactElement | null`, but `memo()` widens the return type to `ReactNode` — passing a memoized row straight to `rowComponent` is a type error. Narrow it once at the definition: `}) as (props: RowComponentProps<RowData>) => ReactElement | null`.
 - Row props declared on the component must **exclude** `index` / `style`: react-window injects those and types `rowProps` as everything *but* them. Declare the shared data separately and take `RowComponentProps<RowData>`.
+
+### Install command paste (`npx skills add …`)
+
+The desktop accepts the ecosystem-conventional install command as a **paste
+format**, so a user can copy a line straight out of a README:
+
+```
+npx skills add humanlayer/skills --skill show-me
+```
+
+- **The pasted string is never executed.** `parseInstallCommand()` lives in
+  `packages/skill-sources/src/parse-install-command.ts` — the
+  `@skillsgate/skill-sources` workspace package, consumed by the CLI's core layer
+  (which the TUI imports directly) **and** by the desktop main process. It reads
+  the string into a `ParsedSource` + skill filter and hands that to the existing
+  pipeline. Never `spawn` `npx`, never resolve a package from the registry, never
+  shell out.
+  - This layer is deliberately **shared, not mirrored**, unlike the agent registry
+    in §2. The two hand-copies had already drifted (the desktop's rejected the
+    `@skill` suffixes and `tree/<ref>/<path>` URLs the CLI accepted), so the fix
+    was to extract a source-only package rather than keep syncing them by hand.
+    It is bundled, never required at runtime: `noExternal` in `packages/cli/tsup.config.ts`
+    and the `externalizeDepsPlugin` exclusion in `apps/desktop/electron-vite.config.ts`.
+    A runtime `require` would fail, because the package is ESM and the desktop main
+    process is CJS.
+- **Never occupy the `skills` bin name.** `npx` ignores `$PATH` entirely and
+  prefers the local `node_modules/.bin`. A global bin collision is a hard
+  `EEXIST` — it would break installs for anyone who already has upstream — and a
+  local collision silently resolves to the lexicographically-first package name,
+  where `skills` beats `skillsgate`. Silent failure is the worst outcome, so we
+  do not compete for the name.
+- **Grammar is upstream-shaped; reachability is not.** Upstream's `parseSource()`
+  understands six source types (`local`, `github`, `gitlab`, `git`, `download`,
+  `well-known`); we install two. `unsupportedSourceReason()` turns the other four
+  into a specific message instead of a vague parse failure.
+- **Upstream flag semantics we mirror**: `-s/--skill` and `-a/--agent` are greedy
+  space-separated varargs (**no** comma splitting); `--skill '*'` / `--agent '*'`
+  mean all; `--all` expands to `--skill '*' --agent '*' -y`; skill names may
+  contain spaces and need quoting; unknown flags are ignored, not fatal.
+- **`formatInstallCommand()` is the inverse of the parser.** The copyable hint in
+  the UI must be produced by it, so the displayed command always round-trips back
+  through `parseInstallCommand()`.
+
+#### Where the paste actually lands
+
+`packages/cli/src/cli.ts` and `src/commands/*` are **unreachable dead code**. Do
+not add features there:
+
+- `bin/cli.mjs` unconditionally `execFileSync`s the `@skillsgate/tui-*` platform
+  binary, forwarding argv. It never imports `cli.ts`.
+- That TUI entry (`packages/tui/src/index.tsx`) ignores argv entirely — it opens
+  SQLite and renders `<App />`.
+- The TUI imports only `cli/src/core/*`, `cli/src/types.js` and
+  `cli/src/constants.js`. Nothing imports `cli.ts`, `commands/`, `mcp/` or `ui/`.
+
+So the paste entry point is the **desktop GUI**:
+
+| Layer | Channel / symbol |
+| --- | --- |
+| Renderer | `InstallFromCommand` in `components/install-from-command.tsx`; `discover.tsx` shows it when the search box matches `INSTALL_COMMAND_HINT` |
+| Preload | `resolveSource(input)` → `skills:resolve-source`; `installSkill(…, skillFilter)` → `skills:install`; `coreInstall(source, skillFilter)` → `core:install` |
+| Main | `skills:resolve-source` parses + clones + discovers and returns a `ResolvedSourcePreview`; `resolveSourceSkills(source, skillFilter)` applies the filter |
+
+Two constraints that shape this:
+
+- **Parsing runs in main, not the renderer.** `source-parser.ts` imports
+  `node:path`/`node:os` for local paths, so importing the shared barrel from the
+  renderer would break the browser bundle. The renderer's `INSTALL_COMMAND_HINT`
+  regex is only an affordance; main is the authority.
+- **`ResolvedSourcePreview` is declared in `src/preload/api.d.ts`**, which uses
+  `export {}` + `declare global`, so main can use it too. That is why the IPC
+  return type needs no mirror.
+
+#### Upstream `skills` collides with us on disk
+
+`vercel-labs/skills` (npm package `skills`, invoked as `npx skills`) shares two
+paths with SkillsGate, and **both** implementations discard the file on a version
+mismatch:
+
+| Path | Upstream | SkillsGate |
+| --- | --- | --- |
+| `~/.agents/skills/` | canonical global store (`UNIVERSAL_SKILLS_DIR`) | `CORE_SKILLS_DIR()` — the git-tracked core set |
+| `~/.agents/.skill-lock.json` | `CURRENT_VERSION = 3`, wipes when `version < 3` | `LOCK_FILE_VERSION = 1`, wipes when `version !== 1` |
+
+- Upstream's `cleanAndCreateDirectory()` **deletes before recreating**, so a real
+  directory in the core set can be removed, and a core entry that is a relative
+  symlink into a skills-library can be broken.
+- The lock file is mutually destructive in both directions. `writeSkillLock()` now
+  backs a foreign-version lock up instead of clobbering it, but the two schemas
+  still cannot coexist — reconciling them is a separate issue.
+
+#### Agent slug differences
+
+Only four upstream `--agent` slugs differ from ours; everything else already
+matches (`github-copilot`, `cursor`, `cline`, `opencode`, `trae`, …). Map them in
+`UPSTREAM_AGENT_ALIASES`:
+
+`codex` → `codex-cli` · `droid` → `droid-cli` · `kilo` → `kilo-code` · `roo` → `roo-code`
 
 ---
 

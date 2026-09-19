@@ -25,6 +25,10 @@ export default defineConfig({
   external: [
     "@napi-rs/keyring",
   ],
-  noExternal: [],
+  // `@skillsgate/skill-sources` is a source-only workspace package: its `exports`
+  // points straight at `.ts` with no build step, and it is listed under
+  // devDependencies so it is never published. tsup must therefore inline it into
+  // dist instead of leaving a bare `import` that would fail at runtime.
+  noExternal: ["@skillsgate/skill-sources"],
   shims: true,
 });

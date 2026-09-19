@@ -8,6 +8,7 @@ describe("agents registry", () => {
     "antigravity",
     "antigravity-ide",
     "antigravity-cli",
+    "gemini-cli",
     "codebuddy",
     "codebuddy-cn",
     "workbuddy",
@@ -17,7 +18,7 @@ describe("agents registry", () => {
     "mercury",
   ];
 
-  it("should have all 10 new agents registered", () => {
+  it("should have all 11 new agents registered", () => {
     for (const agentName of expectedNewAgents) {
       assert.ok(
         agents[agentName],
@@ -48,9 +49,9 @@ describe("agents registry", () => {
     }
   });
 
-  it("should register 29 total coding agents", () => {
+  it("should register 30 total coding agents", () => {
     const keys = Object.keys(agents);
-    assert.equal(keys.length, 29, `Expected 29 agents registered, found ${keys.length}`);
+    assert.equal(keys.length, 30, `Expected 30 agents registered, found ${keys.length}`);
   });
 
   it("should treat the three Antigravity interfaces as separate tools", () => {
@@ -64,6 +65,25 @@ describe("agents registry", () => {
       assert.ok(
         agents[name].globalSkillsDir.includes("gemini"),
         `Agent "${name}" should resolve under ~/.gemini`,
+      );
+    }
+  });
+
+  it("should keep Gemini CLI out of the Antigravity skills dirs", () => {
+    // Four Google products share ~/.gemini and only one of them is Antigravity's.
+    //   Gemini CLI      -> ~/.gemini/skills        (its own bundle documents this)
+    //   Antigravity 2.0 -> ~/.gemini/config/skills (shared customization root)
+    // The Antigravity language servers never reference `.gemini/skills`, so
+    // `gemini-cli` must own that path and the Antigravity trio must not.
+    assert.ok(
+      agents["gemini-cli"].globalSkillsDir.endsWith("/.gemini/skills"),
+      `gemini-cli should own ~/.gemini/skills, got ${agents["gemini-cli"].globalSkillsDir}`,
+    );
+    for (const name of ["antigravity", "antigravity-ide", "antigravity-cli"]) {
+      assert.notEqual(
+        agents[name].globalSkillsDir,
+        agents["gemini-cli"].globalSkillsDir,
+        `Agent "${name}" must not claim Gemini CLI's skills dir`,
       );
     }
   });

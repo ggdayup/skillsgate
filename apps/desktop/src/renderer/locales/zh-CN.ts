@@ -159,6 +159,19 @@ export const zhCN: Record<string, string> = {
   "Applies immediately. Untranslated text stays in English.":
     "立即生效。未翻译的文本将显示英文。",
 
+  // Install from command (pasted `npx skills add …`)
+  "Install from command": "从安装命令导入",
+  "Resolving source...": "正在解析来源…",
+  "Install into Core": "安装到核心",
+  "No agents detected": "未检测到任何工具",
+  "Select all": "全选",
+  "Clear all": "清空",
+  "Select at least one skill": "请至少选择一个技能",
+  selected: "已选",
+  "fans out to every detected tool": "将分发到所有已检测到的工具",
+  "Copy — then paste it into the search box to install":
+    "复制——然后粘贴到搜索框即可安装",
+
   // Core skill set
   Core: "核心",
   "Core Skills": "核心技能",

@@ -5,6 +5,7 @@ export type AgentType =
   | "antigravity"
   | "antigravity-ide"
   | "antigravity-cli"
+  | "gemini-cli"
   | "claude-code"
   | "cline"
   | "codebuddy"
@@ -55,19 +56,14 @@ export interface Skill {
 }
 
 // ---------- Source Parsing ----------
-
-export type SourceType = "github" | "local";
-
-export interface ParsedSource {
-  type: SourceType;
-  url: string;
-  owner: string;
-  repo: string;
-  subpath?: string;
-  ref?: string;
-  skillFilter?: string;
-  localPath?: string;
-}
+//
+// Declared in `@skillsgate/skill-sources` and re-exported here so existing
+// `skillsgate/types` consumers keep resolving these names. The `import type` +
+// `export type` pair (rather than a bare `export … from`) is deliberate:
+// `SourceType` is referenced by `SkillLockEntry` below, and a re-export does not
+// bring the name into local scope.
+import type { SourceType, ParsedSource } from "@skillsgate/skill-sources";
+export type { SourceType, ParsedSource };
 
 // ---------- Lock File ----------
 
@@ -103,7 +99,7 @@ export interface MarketplaceManifest {
 // ---------- Install Types ----------
 
 export type InstallScope = "project" | "global";
-export type InstallMethod = "symlink" | "copy";
+export type { InstallMethod } from "@skillsgate/skill-sources";
 
 export interface InstallResult {
   skillName: string;

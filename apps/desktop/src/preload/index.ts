@@ -29,10 +29,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Skills
   listInstalled: () => ipcRenderer.invoke("skills:list-installed"),
   rescanSkills: () => ipcRenderer.invoke("skills:rescan"),
-  installSkill: (source: string, agents: string[], scope: string) =>
-    ipcRenderer.invoke("skills:install", source, agents, scope),
-  installSkillViaCli: (source: string) =>
-    invokeWithLogging("skills:install-via-cli", source),
+  installSkill: (
+    source: string,
+    agents: string[],
+    scope: string,
+    skillFilter: string[] = [],
+  ) => ipcRenderer.invoke("skills:install", source, agents, scope, skillFilter),
+  // Clone + discover a source *without* installing, so the paste flow can show a
+  // preview before anything is written to disk.
+  resolveSource: (source: string, skillFilter: string[] = []) =>
+    ipcRenderer.invoke("skills:resolve-source", source, skillFilter),
   searchCatalog: (query: string, limit?: number, offset?: number) =>
     ipcRenderer.invoke("skills:search-catalog", query, limit, offset),
   fetchTrending: () => ipcRenderer.invoke("skills:fetch-trending"),
@@ -62,7 +68,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("skills:add-to-agent", skillName, canonicalPath, agentName),
 
   // Core skill set (~/.agents/skills, fanned out to every detected tool)
-  coreInstall: (source: string) => ipcRenderer.invoke("core:install", source),
+  coreInstall: (source: string, skillFilter: string[] = []) =>
+    ipcRenderer.invoke("core:install", source, skillFilter),
   coreSummary: () => ipcRenderer.invoke("core:summary"),
   coreList: () => ipcRenderer.invoke("core:list"),
   coreStatus: () => ipcRenderer.invoke("core:status"),

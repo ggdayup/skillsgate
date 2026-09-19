@@ -27,6 +27,10 @@ export const agentBadges: Record<string, { label: string; color: string }> = {
   // as one family, but distinct enough to tell apart in a badge row.
   "antigravity-ide": { label: "AGI", color: "#3367D6" }, // deeper blue
   "antigravity-cli": { label: "AGC", color: "#5F6368" }, // google gray
+  // A different Google product that only shares ~/.gemini. Deliberately the
+  // purple from the middle of the Gemini gradient so it cannot be mistaken for
+  // a fourth member of the blue Antigravity family above.
+  "gemini-cli":     { label: "GEM", color: "#9B72CB" }, // gemini purple
   cursor:           { label: "Cu", color: "#5599FF" }, // blue
   codebuddy:        { label: "CB", color: "#0052D9" }, // deep blue
   "codebuddy-cn":   { label: "CBN", color: "#165DFF" }, // bright blue

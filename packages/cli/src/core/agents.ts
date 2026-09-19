@@ -185,6 +185,22 @@ export const agents: Record<string, AgentConfig> = {
       (await dirExists(path.join(home, ".gemini", "antigravity-cli"))),
   },
 
+  // Gemini CLI (google-gemini/gemini-cli) — a *different* Google product that
+  // happens to share the ~/.gemini directory. Its bundle spells the layout out:
+  //   Global  -> ~/.gemini/skills   ("available in all projects")
+  //   Project -> <workspace>/.gemini/skills
+  // None of the Antigravity language_servers reference `.gemini/skills` at all
+  // (they use `.gemini/config/`), so this path is unambiguously Gemini CLI's.
+  "gemini-cli": {
+    name: "gemini-cli",
+    displayName: "Gemini CLI",
+    skillsDir: ".gemini/skills",
+    globalSkillsDir: path.join(home, ".gemini", "skills"),
+    detectInstalled: async () =>
+      (await commandExists("gemini")) ||
+      (await dirExists(path.join(home, ".gemini", "skills"))),
+  },
+
   codebuddy: {
     name: "codebuddy",
     displayName: "CodeBuddy",

@@ -15,6 +15,11 @@ export async function readSkillLock(): Promise<SkillLockFile> {
     const data = JSON.parse(raw) as SkillLockFile;
 
     if (data.version !== LOCK_FILE_VERSION) {
+      // A different tool owns this file. Upstream `npx skills` writes
+      // `~/.agents/.skill-lock.json` at version 3, and *both* implementations
+      // discard the file on a version mismatch — so reading is safe, but
+      // writing would destroy the other tool's install provenance.
+      // writeSkillLock() below refuses to clobber it.
       return emptyLock();
     }
 
@@ -24,8 +29,47 @@ export async function readSkillLock(): Promise<SkillLockFile> {
   }
 }
 
+/** Version of the lock file currently on disk, or null when there is none. */
+export async function readLockFileVersion(): Promise<number | null> {
+  try {
+    const raw = await fs.readFile(GLOBAL_LOCK_PATH(), "utf-8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "number" ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function writeSkillLock(lock: SkillLockFile): Promise<void> {
   const lockPath = GLOBAL_LOCK_PATH();
+
+  // Guard against clobbering another tool's lock file. SkillsGate and upstream
+  // `npx skills` share this path but use incompatible versions (1 vs 3), and
+  // both wipe on mismatch — an unguarded write here would silently delete the
+  // other tool's provenance. Park the foreign file, then write ours.
+  //
+  // Residual limitation: the two schemas still cannot coexist, so the other
+  // tool will keep discarding ours. Reconciling them is a separate issue; this
+  // guard only guarantees we never *destroy* data.
+  const onDiskVersion = await readLockFileVersion();
+  if (onDiskVersion !== null && onDiskVersion !== LOCK_FILE_VERSION) {
+    const parked = `${lockPath}.v${onDiskVersion}.bak`;
+    try {
+      await fs.copyFile(lockPath, parked);
+      console.warn(
+        `[skillsgate] ${lockPath} is version ${onDiskVersion}, not ${LOCK_FILE_VERSION} ` +
+          `(written by another skills CLI). Backed it up to ${parked} before writing.`,
+      );
+    } catch {
+      // Could not preserve it — leave the other tool's file untouched.
+      console.warn(
+        `[skillsgate] ${lockPath} is version ${onDiskVersion} and could not be backed up. ` +
+          `Leaving it alone; install provenance will not be recorded.`,
+      );
+      return;
+    }
+  }
+
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
   await fs.writeFile(lockPath, JSON.stringify(lock, null, 2), "utf-8");
 }

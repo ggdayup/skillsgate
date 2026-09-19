@@ -8,6 +8,7 @@ import codexLogo from "../assets/agent-logos/codex.svg"
 import copilotLogo from "../assets/agent-logos/copilot.svg"
 import cursorLogo from "../assets/agent-logos/cursor.svg"
 import droidCliLogo from "../assets/agent-logos/droid-cli.svg"
+import geminiLogo from "../assets/agent-logos/gemini.svg"
 import mercuryLogo from "../assets/agent-logos/mercury.svg"
 import ob1Logo from "../assets/agent-logos/ob-1.svg"
 import openclawLogo from "../assets/agent-logos/openclaw.svg"
@@ -31,6 +32,9 @@ const AGENT_LOGOS: Record<string, string> = {
   // Same brand, three products — reuse the Antigravity mark.
   "antigravity-ide": antigravityLogo,
   "antigravity-cli": antigravityLogo,
+  // Different Google product that merely shares ~/.gemini — its own mark, not
+  // the Antigravity one.
+  "gemini-cli": geminiLogo,
   codebuddy: codebuddyLogo,
   "codebuddy-cn": codebuddyCnLogo,
   opencode: opencodeLogo,
@@ -46,6 +50,7 @@ const AGENT_LOGO_FILTERS: Record<string, string> = {
   antigravity: "none",
   "antigravity-ide": "none",
   "antigravity-cli": "none",
+  "gemini-cli": "none",
   codebuddy: "none",
   "codebuddy-cn": "none",
   mercury: "none",
@@ -61,6 +66,7 @@ export const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   Antigravity: "antigravity",
   "Antigravity IDE": "antigravity-ide",
   "Antigravity CLI": "antigravity-cli",
+  "Gemini CLI": "gemini-cli",
   Cursor: "cursor",
   CodeBuddy: "codebuddy",
   "CodeBuddy CN": "codebuddy-cn",
