@@ -126,3 +126,4 @@ apps/web/*.tsbuildinfo
 .tmp/
 .claude/
 .venv/
+.qoder/
