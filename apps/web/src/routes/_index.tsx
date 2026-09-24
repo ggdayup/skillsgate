@@ -34,7 +34,7 @@ const FEATURES = [
 		label: "EDITOR",
 		title: "Built-in markdown editor",
 		description:
-			"Edit any SKILL.md with a CodeMirror-powered editor. Syntax highlighting, live preview, and save directly to the agent's config directory.",
+			"Edit any SKILL.md in a CodeMirror-powered editor with markdown syntax highlighting. Press Cmd+S and the change is saved straight to disk.",
 		icon: (
 			<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
 				<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -46,7 +46,7 @@ const FEATURES = [
 		label: "REMOTE",
 		title: "Remote server management",
 		description:
-			"Connect to other machines via SSH. Browse, install, and sync skills on remote servers without leaving the app.",
+			"Connect to other machines over SSH. Browse and edit remote skills, and push your local skills with a preview of every change.",
 		icon: (
 			<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
 				<rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
@@ -58,26 +58,31 @@ const FEATURES = [
 	},
 ];
 
+// Keep in sync with the agent registry in apps/desktop/src/main/ipc-handlers.ts
+// (every entry except Universal).
 const AGENTS = [
 	"Claude Code",
 	"Cursor",
-	"Windsurf",
-	"GitHub Copilot",
 	"Codex CLI",
+	"GitHub Copilot",
+	"Windsurf",
 	"Cline",
 	"Continue",
 	"Amp",
 	"Goose",
-	"Roo Code",
-	"Zed",
-	"Aider",
-	"OpenCode",
+	"Junie",
 	"Kilo Code",
+	"OpenCode",
+	"OpenClaw",
+	"Droid CLI",
+	"OB-1",
+	"Pear AI",
+	"Roo Code",
 	"Trae",
-	"VS Code (Copilot Chat)",
-	"Claude Desktop",
-	"Amazon Q",
+	"Zed",
 ];
+
+const AGENT_LIST = `${AGENTS.slice(0, -1).join(", ")}, and ${AGENTS[AGENTS.length - 1]}`;
 
 const FAQ_ITEMS = [
 	{
@@ -85,16 +90,20 @@ const FAQ_ITEMS = [
 		a: "Agent skills are reusable instructions (SKILL.md files) that extend what AI coding agents can do. They give your agent procedural knowledge: how to audit a website, set up a database, follow design patterns, and more.",
 	},
 	{
-		q: "Where do the 91k+ skills come from?",
-		a: "Public skill discovery is powered by skills.sh, an open index of skills from GitHub. SkillsGate provides the interface to browse, search, and install them to your agents.",
+		q: "Where do the skills come from?",
+		a: "Discover is powered by skills.sh, an open directory of agent skills. SkillsGate reads the catalog and fetches each skill straight from its GitHub repository.",
 	},
 	{
 		q: "Which AI agents are supported?",
-		a: "SkillsGate supports 18+ agents including Claude Code, Cursor, Windsurf, GitHub Copilot, Codex CLI, Cline, Continue, Amp, Goose, Roo Code, Zed, Aider, and more. Any agent that reads SKILL.md or .cursorrules-style files is compatible.",
+		a: `SkillsGate detects ${AGENTS.length} coding tools: ${AGENT_LIST}. It also manages ~/.agents/skills, the shared folder the skills CLI uses.`,
 	},
 	{
 		q: "Is SkillsGate free?",
-		a: "Yes. The desktop app, browsing, and installing public skills are all free.",
+		a: "Yes. SkillsGate is free and open source under the MIT license.",
+	},
+	{
+		q: "What happened to the terminal app and npx skillsgate?",
+		a: "The terminal UI was discontinued in September 2026 to focus on the desktop app, and the skillsgate npm package is deprecated. To install skills from the command line, use npx skills.",
 	},
 ];
 
@@ -136,7 +145,7 @@ export default function Home() {
 							className="animate-fade-up mt-6 md:mt-8 text-[15px] md:text-[17px] leading-relaxed text-muted max-w-xl mx-auto"
 							style={{ animationDelay: "0.35s" }}
 						>
-							91,000+ public skills from{" "}
+							Browse the{" "}
 							<a
 								href="https://skills.sh"
 								target="_blank"
@@ -144,9 +153,10 @@ export default function Home() {
 								className="text-foreground hover:text-accent transition-colors"
 							>
 								skills.sh
-							</a>
-							. 18 supported agents. Install to exactly the
-							agents you want. Edit with a built-in markdown editor.
+							</a>{" "}
+							catalog, install to exactly the agents you want, and
+							edit any SKILL.md in a built-in markdown editor. Free,
+							open source, and no account needed.
 						</p>
 
 						{/* Download buttons */}
@@ -166,6 +176,12 @@ export default function Home() {
 								Download Desktop App
 							</a>
 						</div>
+						<p
+							className="animate-fade-up mt-4 text-[11px] font-mono tracking-wider text-muted"
+							style={{ animationDelay: "0.55s" }}
+						>
+							macOS · Windows · Linux
+						</p>
 
 						{/* Stats */}
 						<div
@@ -173,13 +189,13 @@ export default function Home() {
 							style={{ animationDelay: "0.6s" }}
 						>
 							<div className="text-center">
-								<div className="text-2xl md:text-3xl font-semibold tracking-tight text-foreground">91,000+</div>
-								<div className="text-[11px] font-mono tracking-wider uppercase text-muted mt-1">Public skills</div>
+								<div className="text-2xl md:text-3xl font-semibold tracking-tight text-foreground">{AGENTS.length}</div>
+								<div className="text-[11px] font-mono tracking-wider uppercase text-muted mt-1">Agents supported</div>
 							</div>
 							<div className="w-px h-8 bg-border" />
 							<div className="text-center">
-								<div className="text-2xl md:text-3xl font-semibold tracking-tight text-foreground">18</div>
-								<div className="text-[11px] font-mono tracking-wider uppercase text-muted mt-1">Agents supported</div>
+								<div className="text-2xl md:text-3xl font-semibold tracking-tight text-foreground">MIT</div>
+								<div className="text-[11px] font-mono tracking-wider uppercase text-muted mt-1">Open source</div>
 							</div>
 						</div>
 					</div>
@@ -313,12 +329,12 @@ export default function Home() {
 							{
 								step: "01",
 								title: "Search",
-								desc: "Type what you need. SkillsGate searches 91,000+ public skills and returns the most relevant results.",
+								desc: "Open Discover to see what's trending, or search the skills.sh catalog for what you need.",
 							},
 							{
 								step: "02",
 								title: "Preview",
-								desc: "Read the full SKILL.md content, check the source repository, and see which agents it supports.",
+								desc: "Read the full SKILL.md, check its install count, and open the source repository before you install.",
 							},
 							{
 								step: "03",
@@ -328,7 +344,7 @@ export default function Home() {
 							{
 								step: "04",
 								title: "Edit",
-								desc: "Customize any skill with the built-in markdown editor. Your changes stay local to that agent.",
+								desc: "Customize any skill with the built-in markdown editor. Your changes stay on your machine.",
 							},
 						].map((item) => (
 							<div
@@ -416,8 +432,8 @@ export default function Home() {
 							agent skills
 						</h2>
 						<p className="mt-5 text-[15px] text-muted max-w-md mx-auto leading-relaxed">
-							Browse 91,000+ skills, install to the agents you choose, and edit
-							anything with a proper markdown editor.
+							Browse the skills.sh catalog, install to the agents you choose,
+							and edit anything with a proper markdown editor.
 						</p>
 
 						<div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -428,6 +444,9 @@ export default function Home() {
 								Download Desktop App
 							</a>
 						</div>
+						<p className="mt-4 text-[11px] font-mono tracking-wider text-muted">
+							macOS · Windows · Linux
+						</p>
 					</div>
 				</div>
 			</section>
