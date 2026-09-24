@@ -32,6 +32,9 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  # No spaces: latest.yml references this exact name, and GitHub rewrites
+  # spaces in uploaded asset names to dots, which breaks Windows updates.
+  artifactName: "SkillsGate-Setup-${version}.${ext}"
 
 linux:
   target:

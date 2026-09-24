@@ -64,9 +64,12 @@ jobs:
 
       - name: Build and package desktop app
         shell: bash
+        # --publish never: the publish job below owns the GitHub release.
+        # Without it, electron-builder sees the tag and uploads to a draft
+        # release of its own. It still writes latest*.yml either way.
         run: |
           set -euo pipefail
-          package_cmd="npm run package:${{ matrix.platform }} -w @skillsgate/desktop -- ${{ matrix.arch && format('--{0}', matrix.arch) || '' }}"
+          package_cmd="npm run package:${{ matrix.platform }} -w @skillsgate/desktop -- --publish never ${{ matrix.arch && format('--{0}', matrix.arch) || '' }}"
 
           if [[ "${{ matrix.platform }}" != "mac" ]]; then
             eval "$package_cmd"
@@ -126,7 +129,7 @@ jobs:
             apps/desktop/release/*.exe
             apps/desktop/release/*.AppImage
             apps/desktop/release/*.deb
-            apps/desktop/release/*.yml
+            apps/desktop/release/latest*.yml
             apps/desktop/release/*.blockmap
           if-no-files-found: ignore
 
