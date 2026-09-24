@@ -1,4 +1,4 @@
-import { ipcMain, shell, type BrowserWindow } from "electron"
+import { ipcMain, net, shell, type BrowserWindow } from "electron"
 import os from "node:os"
 import path from "node:path"
 import fs from "node:fs/promises"
@@ -1429,7 +1429,7 @@ function parseTrending(html: string): TrendingSkill[] {
  * Throws on a bad response or an empty parse so callers can fall back.
  */
 async function fetchTrending(): Promise<TrendingSkill[]> {
-  const res = await fetch(SKILLS_SH_TRENDING_URL, {
+  const res = await net.fetch(SKILLS_SH_TRENDING_URL, {
     headers: {
       "User-Agent": "SkillsGate (+https://github.com/skillsgate/skillsgate)",
     },
@@ -1820,7 +1820,9 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // Search skills.sh from main process (avoids CORS)
+  // Search skills.sh from main process (avoids CORS). Main-process requests use
+  // net.fetch, not Node's fetch, so they honor the system proxy and Keychain
+  // trust like a browser does (issue #28).
   ipcMain.handle(
     "skills:search-catalog",
     async (
@@ -1831,7 +1833,7 @@ export function registerIpcHandlers(): void {
     ): Promise<{ skills: { id: string; skillId: string; name: string; installs: number; source: string }[]; count: number }> => {
       const q = query.trim().length >= 2 ? query.trim() : "skill"
       const url = `https://skills.sh/api/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`
-      const res = await fetch(url)
+      const res = await net.fetch(url)
       if (!res.ok) throw new Error(`skills.sh search failed (HTTP ${res.status})`)
       const data = await res.json()
       return { skills: data.skills ?? [], count: data.count ?? 0 }
@@ -1868,7 +1870,7 @@ export function registerIpcHandlers(): void {
       let branch = branchCache.get(source)
       if (!branch) {
         try {
-          const res = await fetch(`https://api.github.com/repos/${source}`)
+          const res = await net.fetch(`https://api.github.com/repos/${source}`)
           if (res.ok) {
             const data = await res.json()
             branch = data.default_branch || "main"
@@ -1891,7 +1893,7 @@ export function registerIpcHandlers(): void {
 
       for (const p of paths) {
         try {
-          const res = await fetch(`https://raw.githubusercontent.com/${source}/${branch}/${p}`)
+          const res = await net.fetch(`https://raw.githubusercontent.com/${source}/${branch}/${p}`)
           if (res.ok) return await res.text()
         } catch {
           continue
