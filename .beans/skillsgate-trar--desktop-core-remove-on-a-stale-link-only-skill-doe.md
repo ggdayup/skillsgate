@@ -5,7 +5,7 @@ status: in-progress
 type: bug
 priority: normal
 created_at: 2026-09-22T10:26:42Z
-updated_at: 2026-09-22T10:56:36Z
+updated_at: 2026-09-25T10:59:47Z
 ---
 
 Repro: wechat-computer-use. Core entry was moved to ~/.Trash, but ~/.gemini/antigravity-cli/skills/wechat-computer-use is still a dangling symlink into ~/.agents/skills. planCoreSync() emits an 'unlink' item for that name (findDanglingCoreLinks, core-skills.ts:352), and groupBySkill in apps/desktop/src/renderer/routes/core.tsx:75-88 synthesizes a row for any skill name in the plan — even one absent from listCoreEntries. So the row appears in 'Core skills' with a Remove button. Clicking Remove->Confirm calls coreRemove -> removeCoreSkill -> fs.lstat(core/<name>) -> ENOENT -> {ok:false, error:'core 中不存在该技能'}; the IPC handler (ipc-handlers.ts:2471) throws. The renderer catches it into setError, but the error <p> renders in the TOP summary card (core.tsx:412) while the Remove buttons live in the per-skill list far below (core.tsx:573+) -> user scrolled to row 'w' sees literally nothing. Verified by running the desktop main modules against the real ~/.agents.
@@ -31,3 +31,7 @@ NOT COMMITTED YET: apps/desktop/src/main/core-skills.ts, preload/api.d.ts and re
 
 - [ ] Phantom rows (stale links only) should read "clean up stale links" rather than "remove from the core set"; groupBySkill could flag them separately.
 - [ ] Check whether the CLI core list/status has the same phantom-row wording problem.
+
+## Notes
+
+The code for the checked items landed in commit ff56a7b (CLI engine + desktop mirror + the 5-case regression test). Still open: the phantom-row wording, i.e. a stale-link-only skill reads 'remove from the core set' when there is no core entry left and the honest action is 'clean up stale links'; and whether `core list` / `core status` in the CLI have the same wording.

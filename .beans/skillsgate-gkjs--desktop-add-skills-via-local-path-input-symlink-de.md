@@ -1,11 +1,11 @@
 ---
 # skillsgate-gkjs
 title: 'Desktop: add skills via local path input (symlink default + toggle)'
-status: in-progress
+status: completed
 type: feature
 priority: high
 created_at: 2026-09-22T09:46:24Z
-updated_at: 2026-09-22T09:59:05Z
+updated_at: 2026-09-25T10:59:41Z
 ---
 
 允许用户在 discover 搜索框直接输入本地路径（~/… 或 /…）添加 skill。
@@ -37,3 +37,17 @@ updated_at: 2026-09-22T09:59:05Z
 - agents.md — paste 流程新增路径形态说明
 
 待办：真实 GUI 手动验证（sandbox 无法启动 electron-vite dev，见 AGENTS.md）。CLI/TUI 跟进 bean：skillsgate-e9iw / skillsgate-bpew
+
+## Summary of Changes
+
+Landed in commit ff56a7b.
+
+- `discover.tsx`: `LOCAL_PATH_HINT` (`~/…`, `/…`, `C:\…`) opens the same install panel as the `npx skills add` command form. A lone `/` is not enough to open it, so the panel does not flash while the user is still typing.
+- `install-from-command.tsx`: a local source in Core mode pre-selects Core and offers symlink (default) vs copy. Symlink points the core entry at the source dir, so edits to a skill under development apply live. A same-name refusal raises `conflict` and the footer offers a one-click replace that moves the old entry to `.backup/core--<name>--<stamp>`; `already` marks the no-op where the entry already links to this exact source.
+- `ipc-handlers.ts`: `describeLocalPathProblem` separates typo / not-a-directory / EACCES from 'no SKILL.md found', and `discoverSkillsInDir` collects unreadable dirs so a permission denial is reported as such instead of looking like an empty source. Relative `./` and `../` are rejected in main — the app's cwd is meaningless to a GUI user. `core:install` gained `{ mode, replace }`; GitHub sources are forced to `copy` because their temp clone is deleted.
+- `findDanglingCoreEntries` feeds `core:summary` and a new /core panel with per-link removal, because `listCoreEntries` skips symlinks and such an entry would otherwise vanish from every tool with no explanation.
+- 6 new zh-CN keys.
+
+## Notes
+
+The CLI has no path form yet and the TUI has no entry point — tracked as skillsgate-e9iw and skillsgate-bpew. The desktop's `installDirToCore` gained `{ mode, replace }` ahead of that mirror.
