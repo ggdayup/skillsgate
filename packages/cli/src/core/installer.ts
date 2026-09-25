@@ -208,9 +208,12 @@ async function createSymlink(
       }
     }
 
+    // Physical paths on both ends: `..` in a relative symlink is resolved after
+    // the kernel follows every symlink in the path, so a logical-path-derived
+    // relative link dangles as soon as either side sits behind a symlink.
     const relativePath = path.relative(
-      path.dirname(agentTargetDir),
-      canonicalDir,
+      await realpathOrResolve(path.dirname(agentTargetDir)),
+      await realpathOrResolve(canonicalDir),
     );
 
     const type = process.platform === "win32" ? "junction" : undefined;

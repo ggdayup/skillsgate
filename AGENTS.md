@@ -180,6 +180,18 @@ format**, so a user can copy a line straight out of a README:
 npx skills add humanlayer/skills --skill show-me
 ```
 
+The same panel also accepts a **bare local path** (`~/…` or `/…`, see
+`LOCAL_PATH_HINT` in `discover.tsx`) to add a skill from a folder you are
+developing in. In Core mode a local source offers **symlink (default) vs copy**:
+the symlink lives in `~/.agents/skills` pointing at the source, so edits apply
+live; if the source moves away it surfaces in `findDanglingCoreEntries()` on the
+`/core` page. `./` and `../` are rejected in main — the app's cwd is not a
+meaningful base for a GUI user. GitHub sources always copy (the temp clone is
+deleted). Same-name core entries are refused with a replace-and-retry that
+backs the old one up to `.backup/`. The CLI has no path form yet
+(bean `skillsgate-e9iw`); the desktop's `installDirToCore` gained
+`{ mode, replace }` ahead of the mirror.
+
 - **The pasted string is never executed.** `parseInstallCommand()` lives in
   `packages/skill-sources/src/parse-install-command.ts` — the
   `@skillsgate/skill-sources` workspace package, consumed by the CLI's core layer

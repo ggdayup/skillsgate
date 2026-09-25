@@ -351,6 +351,38 @@ export async function planCoreSync(
 
 // ---------- applying ----------
 
+/**
+ * Link `target` at `srcReal`, preferring a relative link.
+ *
+ * Relative link math has to use the *physical* containing directory: the kernel
+ * resolves `..` after following every symlink in the path, so a tool whose
+ * skills dir sits behind a symlinked ancestor (e.g. ~/.config/zed ->
+ * …/SyncedConfig/config/zed) gets a link that lands nowhere if the relative
+ * path is derived from the logical path. `symlink()` succeeds regardless, so
+ * the only way to catch it is to resolve the link back and compare.
+ *
+ * Returns false when neither the relative nor the absolute form resolves.
+ */
+async function writeCoreLink(
+  physicalDir: string,
+  target: string,
+  srcReal: string,
+): Promise<boolean> {
+  const type = process.platform === "win32" ? "junction" : undefined;
+  for (const linkValue of [path.relative(physicalDir, srcReal), srcReal]) {
+    try {
+      await fs.symlink(linkValue, target, type);
+    } catch {
+      await fs.unlink(target).catch(() => {});
+      continue;
+    }
+    const resolved = await fs.realpath(target).catch(() => null);
+    if (resolved === srcReal) return true;
+    await fs.unlink(target).catch(() => {});
+  }
+  return false;
+}
+
 async function linkCoreEntry(
   entry: CoreEntry,
   agent: AgentConfig,
@@ -368,9 +400,11 @@ async function linkCoreEntry(
       else return { ok: false, error: "同名真实条目已存在" };
     }
 
-    const relative = path.relative(dir, entry.realPath);
-    const type = process.platform === "win32" ? "junction" : undefined;
-    await fs.symlink(relative, target, type);
+    if (
+      !(await writeCoreLink(await realpathOrResolve(dir), target, entry.realPath))
+    ) {
+      throw new Error("软链无法解析到 core 条目");
+    }
     return { ok: true };
   } catch (err) {
     // Windows / cross-device fallback: materialise a copy instead of a link.
@@ -574,32 +608,49 @@ async function unlinkCoreLinkFromAgent(
  * Drop a skill from the core set and unlink it everywhere. Only symlinks that
  * point back into the core dir are removed; a real directory left behind by a
  * copy-mode install is reported as a residual copy instead of being deleted.
+ *
+ * A core entry that is already gone is not an error: the caller may be looking
+ * at a skill that survives only as a dangling link in a tool dir, and the sweep
+ * below is what clears it.
  */
 export async function removeCoreSkill(name: string): Promise<{
   ok: boolean;
   unlinked: number;
   residualCopies: string[];
+  /** True when there was no core entry left, so only links could be swept. */
+  coreEntryMissing: boolean;
   error?: string;
 }> {
   const dir = CORE_SKILLS_DIR();
   const safeName = sanitizeName(name);
   const target = path.join(dir, safeName);
   if (!isPathSafe(target, dir)) {
-    return { ok: false, unlinked: 0, residualCopies: [], error: "路径越界" };
+    return {
+      ok: false,
+      unlinked: 0,
+      residualCopies: [],
+      coreEntryMissing: false,
+      error: "路径越界",
+    };
   }
 
+  let coreEntryMissing = false;
   try {
     const lst = await fs.lstat(target);
     if (lst.isSymbolicLink()) await fs.unlink(target);
     else await fs.rm(target, { recursive: true, force: true });
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    return {
-      ok: false,
-      unlinked: 0,
-      residualCopies: [],
-      error: code === "ENOENT" ? "core 中不存在该技能" : String(err),
-    };
+    if (code !== "ENOENT") {
+      return {
+        ok: false,
+        unlinked: 0,
+        residualCopies: [],
+        coreEntryMissing: false,
+        error: String(err),
+      };
+    }
+    coreEntryMissing = true;
   }
 
   const detected = await detectInstalledAgents();
@@ -622,7 +673,7 @@ export async function removeCoreSkill(name: string): Promise<{
     }
   }
 
-  return { ok: true, unlinked, residualCopies };
+  return { ok: true, unlinked, residualCopies, coreEntryMissing };
 }
 
 /**

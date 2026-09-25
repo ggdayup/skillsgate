@@ -40,6 +40,12 @@ export function InstallFromCommand({
   const [agents, setAgents] = useState<DetectedAgent[]>([])
   const [selectedAgents, setSelectedAgents] = useState<string[]>([])
   const [useCore, setUseCore] = useState(false)
+  // Only meaningful for local-path sources in Core mode: link keeps the core
+  // entry pointed at the source dir so edits apply live (bean skillsgate-gkjs).
+  const [linkMode, setLinkMode] = useState(true)
+  // Names the last install refused as same-name core conflicts; the footer
+  // offers a one-click replace-and-retry that backs the old entries up first.
+  const [conflicts, setConflicts] = useState<string[] | null>(null)
   const [installedCount, setInstalledCount] = useState(0)
 
   // Resolve whenever the pasted text changes. The `stale` flag drops a slow
@@ -50,6 +56,7 @@ export function InstallFromCommand({
     setError(null)
     setPreview(null)
     setSelected(new Set())
+    setConflicts(null)
     setInstalledCount(0)
 
     electronAPI
@@ -58,6 +65,9 @@ export function InstallFromCommand({
         if (stale) return
         setPreview(next)
         if (!next.ok) setError(next.error ?? "Could not resolve that source.")
+        // A local path almost always means "add this skill I'm working on" to
+        // the core set, so pre-select Core; GitHub keeps the old default.
+        if (next.ok && next.sourceType === "local") setUseCore(true)
         // Pre-select exactly the skills the command named (`--skill x`), since
         // that intent is unambiguous. When it named none, start empty so the user
         // picks from the whole repo rather than inheriting a default they never
@@ -99,6 +109,7 @@ export function InstallFromCommand({
 
   const skills = preview?.skills ?? []
   const allSelected = skills.length > 0 && selected.size === skills.length
+  const isLocalSource = preview?.sourceType === "local"
   const canInstall =
     phase === "ready" &&
     selected.size > 0 &&
@@ -114,15 +125,26 @@ export function InstallFromCommand({
     })
   }
 
-  async function handleInstall() {
+  async function handleInstall(replace = false) {
     if (!preview?.label || selected.size === 0) return
     setPhase("installing")
     setError(null)
+    setConflicts(null)
     const names = [...selected]
 
     try {
       if (useCore) {
-        const out = await electronAPI.coreInstall(preview.label, names)
+        const out = await electronAPI.coreInstall(preview.label, names, {
+          mode: isLocalSource && linkMode ? "link" : "copy",
+          replace,
+        })
+        const conflictNames = out.filter((r) => r.conflict).map((r) => r.name)
+        if (conflictNames.length > 0) {
+          setConflicts(conflictNames)
+          throw new Error(
+            conflictNames.join(", ") + " already exists in Core.",
+          )
+        }
         const failed = out.filter((r) => r.error)
         if (failed.length > 0) {
           throw new Error(failed.map((r) => `${r.name}: ${r.error}`).join(", "))
@@ -267,6 +289,38 @@ export function InstallFromCommand({
                 </span>
               </label>
 
+              {useCore && isLocalSource && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      {
+                        on: linkMode,
+                        label: t("Symlink — edits to the source apply live"),
+                        set: () => setLinkMode(true),
+                      },
+                      {
+                        on: !linkMode,
+                        label: t("Copy — detach from the source folder"),
+                        set: () => setLinkMode(false),
+                      },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.label}
+                      onClick={opt.set}
+                      className={
+                        "px-2 py-1 rounded-md text-[11px] border transition-colors " +
+                        (opt.on
+                          ? "bg-foreground text-background border-transparent"
+                          : "bg-surface text-muted border-border hover:text-foreground")
+                      }
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {!useCore && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {agents.length === 0 && (
@@ -330,9 +384,18 @@ export function InstallFromCommand({
           >
             {phase === "done" ? t("Done") : t("Cancel")}
           </button>
+          {phase !== "done" && conflicts && conflicts.length > 0 && (
+            <button
+              onClick={() => handleInstall(true)}
+              disabled={!canInstall}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-amber-600/90 text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {t("Replace in Core (backs up the old entry)")}
+            </button>
+          )}
           {phase !== "done" && (
             <button
-              onClick={handleInstall}
+              onClick={() => handleInstall()}
               disabled={!canInstall}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[12px] font-medium bg-foreground text-background hover:opacity-90 transition-opacity disabled:opacity-50"
             >

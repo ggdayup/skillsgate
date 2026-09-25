@@ -40,6 +40,7 @@ import {
 } from "./skill-paths"
 import {
   applyCoreSync,
+  findDanglingCoreEntries,
   getCoreStatus,
   getCoreSummary,
   installDirToCore,
@@ -51,6 +52,7 @@ import {
   replaceConflictWithCoreLink,
   setExclusion,
   type CoreAgent,
+  type CoreInstallOptions,
 } from "./core-skills"
 
 // ---------------------------------------------------------------------------
@@ -1305,6 +1307,7 @@ async function discoverSkillsInDir(
   dir: string,
   depth = 0,
   maxDepth = 5,
+  unreadable?: string[],
 ): Promise<ParsedSkill[]> {
   if (depth > maxDepth) return []
 
@@ -1330,14 +1333,33 @@ async function discoverSkillsInDir(
         path.join(dir, entry.name),
         depth + 1,
         maxDepth,
+        unreadable,
       )
       skills.push(...subSkills)
     }
   } catch {
-    // Directory not readable
+    unreadable?.push(dir)
   }
 
   return skills
+}
+
+/**
+ * Distinguishes the ways a user-typed local path fails, so a typo, a missing
+ * SKILL.md and a permission denial each get their own message instead of all
+ * collapsing into "No SKILL.md files found".
+ */
+async function describeLocalPathProblem(dir: string): Promise<string | null> {
+  try {
+    const st = await fs.stat(dir)
+    if (!st.isDirectory()) return `路径不是目录：${dir}`
+    return null
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === "ENOENT") return `路径不存在：${dir}`
+    if (code === "EACCES" || code === "EPERM") return `没有权限访问：${dir}`
+    return `无法访问 ${dir}：${code ?? String(err)}`
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1384,9 +1406,12 @@ async function resolveSourceSkills(
     sourceDir = tmpDir
   } else {
     sourceDir = parsed.url
+    const problem = await describeLocalPathProblem(sourceDir)
+    if (problem) return { ok: false, error: problem }
   }
 
-  const discovered = await discoverSkillsInDir(sourceDir)
+  const unreadable: string[] = []
+  const discovered = await discoverSkillsInDir(sourceDir, 0, 5, unreadable)
 
   const wanted = new Set(
     skillFilter
@@ -1406,7 +1431,9 @@ async function resolveSourceSkills(
       ok: false,
       error:
         discovered.length === 0
-          ? "No SKILL.md files found in source."
+          ? unreadable.length > 0
+            ? `部分目录无法读取（权限不足）：${unreadable.join(", ")}`
+            : `该目录下（含子目录）未找到可解析的 SKILL.md：${sourceDir}`
           : `No skill named ${skillFilter.join(", ")} in this source. Available: ${discovered
               .map((skill) => skill.name)
               .join(", ")}.`,
@@ -1488,9 +1515,13 @@ async function installSkillToAgent(
         // Target doesn't exist, that's fine
       }
 
+      // Physical paths on both ends: `..` in a relative symlink is resolved
+      // after the kernel follows every symlink in the path, so a link derived
+      // from logical paths dangles once either side sits behind a symlink
+      // (this is what made every Zed link unresolvable).
       const relativePath = path.relative(
-        path.dirname(agentTargetDir),
-        canonicalDir,
+        await realpathOrResolve(path.dirname(agentTargetDir)),
+        await realpathOrResolve(canonicalDir),
       )
       const type = process.platform === "win32" ? "junction" : undefined
       await fs.symlink(relativePath, agentTargetDir, type)
@@ -1810,6 +1841,17 @@ export function registerIpcHandlers(): void {
         return { ...blank(), error: parsed.error }
       }
 
+      // `./x` / `../x` would resolve against the app's working directory, which
+      // is meaningless (and unguessable) to a desktop user typing a path. The
+      // shared parser keeps relative paths for the CLI; the GUI refuses them.
+      if (/(^|\s)\.\.?\//.test(input)) {
+        return {
+          ...blank(),
+          error:
+            "不支持相对路径（./ 或 ../）：请用绝对路径或以 ~/ 开头的路径。",
+        }
+      }
+
       const command = parsed.value
       const source =
         command.source.type === "local"
@@ -1825,6 +1867,7 @@ export function registerIpcHandlers(): void {
         return {
           ok: true,
           wasCommand: command.wasCommand,
+          sourceType: command.source.type,
           label: source,
           skills: resolved.value.skills.map((skill) => ({
             name: skill.name,
@@ -2338,27 +2381,49 @@ Add your skill instructions here.
   // Install straight into the core set, then fan out. Used when "Core" is the
   // chosen install target — it subsumes every tool, so the per-agent path is
   // skipped entirely rather than run 20 times.
+  //
+  // `opts.mode` "link" makes each core entry a symlink at the source dir
+  // (only meaningful for local-path sources; the renderer gates it). `opts.replace`
+  // moves a same-name core entry to .backup/ instead of refusing it.
   ipcMain.handle(
     "core:install",
     async (
       _e,
       source: string,
       skillFilter: string[] = [],
-    ): Promise<{ name: string; path: string; error?: string }[]> => {
+      opts: CoreInstallOptions = {},
+    ): Promise<
+      { name: string; path: string; error?: string; conflict?: boolean; already?: boolean }[]
+    > => {
       const resolved = await resolveSourceSkills(source, skillFilter)
       if (!resolved.ok) throw new Error(resolved.error)
 
-      const out: { name: string; path: string; error?: string }[] = []
+      const out: {
+        name: string
+        path: string
+        error?: string
+        conflict?: boolean
+        already?: boolean
+      }[] = []
+      // A GitHub source is a temp clone that gets deleted on cleanup — linking
+      // at it would leave nothing but a dangling core entry, so force copy.
+      const installOpts: CoreInstallOptions =
+        resolved.value.parsed.type === "github"
+          ? { ...opts, mode: "copy" }
+          : opts
       try {
         for (const skill of resolved.value.skills) {
           const res = await installDirToCore(
             path.dirname(skill.filePath),
             skill.name,
+            installOpts,
           )
           out.push({
             name: skill.name,
             path: res.path,
             error: res.ok ? undefined : res.error,
+            conflict: res.conflict,
+            already: res.already,
           })
         }
       } finally {
@@ -2382,6 +2447,7 @@ Add your skill instructions here.
       count: entries.length,
       skills: entries.map((e) => e.name),
       exclusions: cfg.exclusions,
+      danglingEntries: await findDanglingCoreEntries(),
     }
   })
 

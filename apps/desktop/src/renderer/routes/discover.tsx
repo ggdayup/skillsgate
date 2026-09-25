@@ -23,6 +23,15 @@ import { CommandChip, InstallFromCommand } from "../components/install-from-comm
 const INSTALL_COMMAND_HINT =
   /(?:^|\s)(?:(?:npx|bunx|pnpm|yarn|npm|bun|deno)\s+(?:dlx\s+)?)?skills(?:@\S+)?\s+(?:add|a|install|i)(?:\s|$)/i
 
+/**
+ * Second trigger for the same panel: a typed/pasted local skill directory.
+ * Absolute (`/…`, `C:\…`) or home-relative (`~/…`) only — `./` and `../` have
+ * no meaningful base in the GUI, and main rejects them explicitly. The extra
+ * path characters after the prefix keep a lone "/" from opening the panel
+ * while the user is still typing.
+ */
+const LOCAL_PATH_HINT = /^\s*(?:~\/\S|\/\S|[A-Za-z]:[\\/]\S)/
+
 // ---------------------------------------------------------------------------
 // Types matching the skills.sh response shape
 // ---------------------------------------------------------------------------
@@ -915,10 +924,12 @@ export function Discover() {
     updateInstalledState(installed)
   }
 
-  // The search box doubles as a paste target for `npx skills add …` commands.
+  // The search box doubles as a paste target for `npx skills add …` commands
+  // and as a path input for local skill directories.
   // Uses the live `searchQuery`, not the deferred value, so the panel appears
   // the moment the command is pasted.
-  const isInstallCommand = INSTALL_COMMAND_HINT.test(searchQuery)
+  const isInstallCommand =
+    INSTALL_COMMAND_HINT.test(searchQuery) || LOCAL_PATH_HINT.test(searchQuery)
 
   const getCachedContent = useCallback((key: string) => {
     return contentCacheRef.current.get(key)

@@ -403,7 +403,11 @@ async function runCoreRemove(opts: CoreOptions): Promise<void> {
   }
 
   console.log(
-    fmt.success(`  Removed ${name} from core; unlinked from ${res.unlinked} tool(s).`),
+    fmt.success(
+      res.coreEntryMissing
+        ? `  ${name} was already out of core; unlinked from ${res.unlinked} tool(s).`
+        : `  Removed ${name} from core; unlinked from ${res.unlinked} tool(s).`,
+    ),
   );
   if (res.residualCopies.length > 0) {
     console.log();

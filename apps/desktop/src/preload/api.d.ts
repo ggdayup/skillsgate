@@ -112,6 +112,25 @@ declare global {
     count: number
     skills: string[]
     exclusions: Record<string, string[]>
+    /** Core entries that are symlinks whose target no longer exists. */
+    danglingEntries: { name: string; pointsTo: string }[]
+  }
+
+  interface CoreInstallOptions {
+    /** "link" keeps the core entry pointed at the local source dir; "copy" materialises it. */
+    mode?: "copy" | "link"
+    /** Back up a same-name core entry to .backup/ instead of refusing it. */
+    replace?: boolean
+  }
+
+  interface CoreInstallEntry {
+    name: string
+    path: string
+    error?: string
+    /** Same-name refusal — the UI offers a replace-and-retry. */
+    conflict?: boolean
+    /** No-op: the entry already linked to this exact source. */
+    already?: boolean
   }
 
   interface CoreSyncItem {
@@ -167,6 +186,8 @@ declare global {
     error?: string
     /** True when the input was recognized as a `skills add` invocation. */
     wasCommand: boolean
+    /** Set on successful resolves; "local" enables the symlink install mode. */
+    sourceType?: "github" | "local"
     /** `owner/repo` for GitHub sources, or the absolute path for local ones. */
     label: string
     skills: { name: string; description: string }[]
@@ -241,7 +262,8 @@ declare global {
     coreInstall: (
       source: string,
       skillFilter?: string[],
-    ) => Promise<{ name: string; path: string; error?: string }[]>
+      opts?: CoreInstallOptions,
+    ) => Promise<CoreInstallEntry[]>
     coreSummary: () => Promise<CoreSummary>
     coreList: () => Promise<CoreListResult>
     coreStatus: () => Promise<CoreStatusEntry[]>
@@ -252,6 +274,7 @@ declare global {
       ok: boolean
       unlinked: number
       residualCopies: string[]
+      coreEntryMissing: boolean
     }>
     coreSetExclusion: (
       agentName: string,

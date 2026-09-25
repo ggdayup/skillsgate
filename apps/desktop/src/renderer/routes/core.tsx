@@ -167,6 +167,9 @@ export function Core() {
   // act on a second, distinct click. Keyed so only one row is ever armed.
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [confirmReplace, setConfirmReplace] = useState<string | null>(null)
+  // Row actions happen far below the header card, so their failure has to be
+  // rendered next to the row — a header-only banner reads as "nothing happened".
+  const [rowError, setRowError] = useState<{ key: string; msg: string } | null>(null)
 
   const refresh = useCallback(async () => {
     const [l, s, sum, plan] = await Promise.all([
@@ -245,14 +248,17 @@ export function Core() {
     }
   }
 
-  async function runRow(fn: () => Promise<unknown>) {
+  async function runRow(fn: () => Promise<unknown>, key = "row") {
     setBusy("row")
     setError(null)
+    setRowError(null)
     try {
       await fn()
       await refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      setRowError({ key, msg })
+      setError(msg)
     } finally {
       setBusy(null)
     }
@@ -307,7 +313,42 @@ export function Core() {
           </div>
         )}
 
-        {/* ---- sync controls ---- */}
+        {/* ---- dangling entries: core symlinks whose source moved away ---- */}
+        {list && list.danglingEntries.length > 0 && (
+          <div className="rounded-2xl border border-amber-600/40 bg-amber-600/5 p-5 mb-6">
+            <h3 className="text-[13px] font-semibold text-foreground">
+              {t("Broken links in Core")} ({list.danglingEntries.length})
+            </h3>
+            <p className="text-[12px] text-muted mt-1 mb-2">
+              {t("These core entries symlink to a folder that no longer exists. Re-add the skill by its new path, or remove the dead link.")}
+            </p>
+            <ul className="space-y-1">
+              {list.danglingEntries.map((d) => (
+                <li key={d.name} className="flex items-center gap-2 text-[12px]">
+                  <span className="font-mono text-foreground">{d.name}</span>
+                  <span className="text-muted truncate">{d.pointsTo}</span>
+                  <button
+                    onClick={() =>
+                      void runRow(
+                        () => electronAPI.coreRemove(d.name),
+                        `dangling:${d.name}`,
+                      )
+                    }
+                    disabled={busy !== null}
+                    className="ml-auto shrink-0 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted hover:text-red-400 disabled:opacity-40"
+                  >
+                    {t("Remove")}
+                  </button>
+                  {rowError?.key === `dangling:${d.name}` && (
+                    <span className="shrink-0 text-[11px] text-red-600">
+                      {rowError.msg}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="rounded-2xl border border-border bg-surface p-5 mb-6">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
@@ -609,7 +650,10 @@ export function Core() {
                             disabled={busy !== null}
                             onClick={() => {
                               setConfirmRemove(null)
-                              void runRow(() => electronAPI.coreRemove(skill.name))
+                              void runRow(
+                                () => electronAPI.coreRemove(skill.name),
+                                `skill:${skill.name}`,
+                              )
                             }}
                             className="rounded-md border border-red-500 bg-red-500 px-2 py-1 text-[11px] text-white disabled:opacity-40"
                             title={t("Remove from the core set and unlink everywhere")}
@@ -634,6 +678,12 @@ export function Core() {
                         </button>
                       )}
                     </div>
+
+                    {rowError?.key === `skill:${skill.name}` && (
+                      <p className="px-4 pb-3 -mt-1 text-[11px] text-red-600">
+                        {rowError.msg}
+                      </p>
+                    )}
 
                     {open && (
                       <div className="px-4 pb-4 flex flex-col gap-2">
@@ -664,12 +714,14 @@ export function Core() {
                               <button
                                 disabled={busy !== null}
                                 onClick={() =>
-                                  void runRow(() =>
-                                    electronAPI.coreSetExclusion(
-                                      entry.agent,
-                                      skill.name,
-                                      !excluded,
-                                    ),
+                                  void runRow(
+                                    () =>
+                                      electronAPI.coreSetExclusion(
+                                        entry.agent,
+                                        skill.name,
+                                        !excluded,
+                                      ),
+                                    `skill:${skill.name}`,
                                   )
                                 }
                                 className="rounded-md border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-40 hover:text-foreground hover:bg-surface-hover"

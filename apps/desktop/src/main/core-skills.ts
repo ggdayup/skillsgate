@@ -2,9 +2,11 @@
 //
 // Mirrors packages/cli/src/core/core-skills.ts for the main process.
 //
-// `~/.agents/skills` IS the core set: real directories, git-tracked. Every entry
-// is symlinked into every *detected* tool. Anything installed for only some tools
-// lives in `~/.agents/.store`, so it never leaks into the core set.
+// `~/.agents/skills` IS the core set: git-tracked entries, normally real
+// directories (local-path installs may instead symlink an external source dir).
+// Every entry is symlinked into every *detected* tool. Anything installed for
+// only some tools lives in `~/.agents/.store`, so it never leaks into the core
+// set.
 //
 // Directory contents are the source of truth; `~/.agents/core.json` only records
 // per-agent opt-outs. The agent list is injected rather than imported so this
@@ -364,6 +366,33 @@ export async function planCoreSync(agents: CoreAgent[]): Promise<CoreSyncPlan> {
 
 // ---------- applying ----------
 
+/**
+ * Mirrors the CLI's writeCoreLink. Relative link math must use the *physical*
+ * containing dir: the kernel resolves `..` after following every symlink in the
+ * path, so a tool dir behind a symlinked ancestor (e.g. ~/.config/zed ->
+ * …/SyncedConfig/config/zed) otherwise gets a link that lands nowhere — and
+ * symlink() succeeds anyway, so the only way to catch it is to resolve back.
+ */
+async function writeCoreLink(
+  physicalDir: string,
+  target: string,
+  srcReal: string,
+): Promise<boolean> {
+  const type = process.platform === "win32" ? "junction" : undefined
+  for (const linkValue of [path.relative(physicalDir, srcReal), srcReal]) {
+    try {
+      await fs.symlink(linkValue, target, type)
+    } catch {
+      await fs.unlink(target).catch(() => {})
+      continue
+    }
+    const resolved = await fs.realpath(target).catch(() => null)
+    if (resolved === srcReal) return true
+    await fs.unlink(target).catch(() => {})
+  }
+  return false
+}
+
 async function linkCoreEntry(
   entry: CoreEntry,
   agent: CoreAgent,
@@ -381,9 +410,11 @@ async function linkCoreEntry(
       else return { ok: false, error: "同名真实条目已存在" }
     }
 
-    const relative = path.relative(dir, entry.realPath)
-    const type = process.platform === "win32" ? "junction" : undefined
-    await fs.symlink(relative, target, type)
+    if (
+      !(await writeCoreLink(await realpathOrResolve(dir), target, entry.realPath))
+    ) {
+      throw new Error("软链无法解析到 core 条目")
+    }
     return { ok: true }
   } catch (err) {
     // Windows / cross-device fallback: materialise a copy.
@@ -531,17 +562,42 @@ async function unlinkCoreLinkFromAgent(
   }
 }
 
+export interface CoreInstallOptions {
+  /** "link" symlinks the core entry at the source dir; "copy" (default) copies it in. */
+  mode?: "copy" | "link"
+  /** Move an existing same-name entry to BACKUP_DIR instead of refusing. */
+  replace?: boolean
+}
+
+export interface CoreInstallOutcome {
+  ok: boolean
+  path: string
+  error?: string
+  /** True when the entry already linked to this exact source (no-op). */
+  already?: boolean
+  /** True when the refusal was a same-name conflict the UI can offer to replace. */
+  conflict?: boolean
+}
+
 /**
- * Installs a resolved skill folder into the core set as a **real directory**
- * (not a symlink — the core dir is git-tracked and must hold actual files).
+ * Installs a resolved skill folder into the core set.
  *
- * Refuses to clobber an existing entry: overwriting a core skill would silently
- * rewrite it in every tool at once. The caller surfaces the error.
+ * Default is a **real directory** (copy) — the core dir is git-tracked and must
+ * hold actual files. `mode: "link"` instead symlinks the entry at the source
+ * directory so edits to a local skill apply live; that link points *outside*
+ * the core dir, so it surfaces as a dangling entry if the source moves away
+ * (see `findDanglingCoreEntries`).
+ *
+ * Refuses to clobber an existing entry unless `replace` is set: overwriting a
+ * core skill would silently rewrite it in every tool at once. The caller
+ * surfaces the error.
  */
 export async function installDirToCore(
   skillDir: string,
   name: string,
-): Promise<{ ok: boolean; path: string; error?: string }> {
+  opts: CoreInstallOptions = {},
+): Promise<CoreInstallOutcome> {
+  const mode = opts.mode ?? "copy"
   const safeName = sanitizeName(name)
   const target = path.join(CORE_SKILLS_DIR, safeName)
   if (!isPathSafe(target, CORE_SKILLS_DIR)) {
@@ -551,14 +607,48 @@ export async function installDirToCore(
   try {
     if (await pathExists(target)) {
       const lst = await fs.lstat(target)
-      return {
-        ok: false,
-        path: target,
-        error: `core 中已存在 ${safeName}（${lst.isSymbolicLink() ? "软链" : "目录"}）`,
+      if (mode === "link" && lst.isSymbolicLink()) {
+        const [srcReal, entryReal] = await Promise.all([
+          realpathOrResolve(skillDir),
+          realpathOrResolve(target),
+        ])
+        if (srcReal === entryReal) {
+          return { ok: true, path: target, already: true }
+        }
       }
+      if (!opts.replace) {
+        return {
+          ok: false,
+          path: target,
+          conflict: true,
+          error: `core 中已存在 ${safeName}（${lst.isSymbolicLink() ? "软链" : "目录"}）`,
+        }
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+      const backupPath = path.join(BACKUP_DIR, `core--${safeName}--${stamp}`)
+      await fs.mkdir(BACKUP_DIR, { recursive: true })
+      await movePath(target, backupPath)
     }
     await fs.mkdir(CORE_SKILLS_DIR, { recursive: true })
-    await fs.cp(skillDir, target, { recursive: true, dereference: true })
+
+    if (mode === "link") {
+      const srcReal = await realpathOrResolve(skillDir)
+      const type = process.platform === "win32" ? "junction" : undefined
+      // Same fallback chain as fan-out links: relative → absolute → copy.
+      // Relative math uses the physical core dir, see writeCoreLink.
+      const coreReal = await realpathOrResolve(CORE_SKILLS_DIR)
+      try {
+        await fs.symlink(path.relative(coreReal, srcReal), target, type)
+      } catch {
+        try {
+          await fs.symlink(srcReal, target, type)
+        } catch {
+          await fs.cp(skillDir, target, { recursive: true, dereference: true })
+        }
+      }
+    } else {
+      await fs.cp(skillDir, target, { recursive: true, dereference: true })
+    }
     return { ok: true, path: target }
   } catch (err) {
     return {
@@ -569,28 +659,80 @@ export async function installDirToCore(
   }
 }
 
+/**
+ * Core entries that are symlinks to a target that no longer exists — e.g. a
+ * local-path skill whose source dir was moved or lives on an unmounted volume.
+ * `listCoreEntries` skips them (not a directory), so the UI needs this separate
+ * readout to explain why a once-added skill vanished from every tool.
+ */
+export async function findDanglingCoreEntries(): Promise<
+  { name: string; pointsTo: string }[]
+> {
+  const out: { name: string; pointsTo: string }[] = []
+  for (const entry of await readdirSafe(CORE_SKILLS_DIR)) {
+    if (entry.name.startsWith(".") || !entry.isSymbolicLink()) continue
+    const p = path.join(CORE_SKILLS_DIR, entry.name)
+    try {
+      await fs.stat(p)
+      continue
+    } catch {
+      // dangling
+    }
+    let raw = ""
+    try {
+      raw = await fs.readlink(p)
+    } catch {
+      continue
+    }
+    out.push({ name: entry.name, pointsTo: path.resolve(path.dirname(p), raw) })
+  }
+  return out
+}
+
+/**
+ * Mirrors the CLI's removeCoreSkill. A core entry that is already gone is not
+ * an error — the UI row can survive purely as a dangling link in a tool dir,
+ * and the sweep below is what clears it.
+ */
 export async function removeCoreSkill(
   name: string,
   agents: CoreAgent[],
-): Promise<{ ok: boolean; unlinked: number; residualCopies: string[]; error?: string }> {
+): Promise<{
+  ok: boolean
+  unlinked: number
+  residualCopies: string[]
+  coreEntryMissing: boolean
+  error?: string
+}> {
   const safeName = sanitizeName(name)
   const target = path.join(CORE_SKILLS_DIR, safeName)
   if (!isPathSafe(target, CORE_SKILLS_DIR)) {
-    return { ok: false, unlinked: 0, residualCopies: [], error: "路径越界" }
+    return {
+      ok: false,
+      unlinked: 0,
+      residualCopies: [],
+      coreEntryMissing: false,
+      error: "路径越界",
+    }
   }
 
+  let coreEntryMissing = false
   try {
     const lst = await fs.lstat(target)
     if (lst.isSymbolicLink()) await fs.unlink(target)
     else await fs.rm(target, { recursive: true, force: true })
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
-    return {
-      ok: false,
-      unlinked: 0,
-      residualCopies: [],
-      error: code === "ENOENT" ? "core 中不存在该技能" : String(err),
+    if (code !== "ENOENT") {
+      return {
+        ok: false,
+        unlinked: 0,
+        residualCopies: [],
+        coreEntryMissing: false,
+        error: String(err),
+      }
     }
+    coreEntryMissing = true
   }
 
   let unlinked = 0
@@ -611,7 +753,7 @@ export async function removeCoreSkill(
     }
   }
 
-  return { ok: true, unlinked, residualCopies }
+  return { ok: true, unlinked, residualCopies, coreEntryMissing }
 }
 
 export async function promoteToCore(

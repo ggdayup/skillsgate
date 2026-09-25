@@ -68,8 +68,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("skills:add-to-agent", skillName, canonicalPath, agentName),
 
   // Core skill set (~/.agents/skills, fanned out to every detected tool)
-  coreInstall: (source: string, skillFilter: string[] = []) =>
-    ipcRenderer.invoke("core:install", source, skillFilter),
+  coreInstall: (
+    source: string,
+    skillFilter: string[] = [],
+    opts: { mode?: "copy" | "link"; replace?: boolean } = {},
+  ) => ipcRenderer.invoke("core:install", source, skillFilter, opts),
   coreSummary: () => ipcRenderer.invoke("core:summary"),
   coreList: () => ipcRenderer.invoke("core:list"),
   coreStatus: () => ipcRenderer.invoke("core:status"),
