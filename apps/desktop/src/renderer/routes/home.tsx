@@ -143,7 +143,7 @@ interface DragToast {
 interface LeftSidebarProps {
   totalSkillCount: number
   favoritesCount: number
-  agentsWithSkills: DetectedAgent[]
+  toolAgents: DetectedAgent[]
   agentSkillCounts: Record<string, number>
   selectedAgent: string | null
   onSelectAgent: (agent: string | null) => void
@@ -166,7 +166,7 @@ interface LeftSidebarProps {
 function LeftSidebar({
   totalSkillCount,
   favoritesCount,
-  agentsWithSkills,
+  toolAgents,
   agentSkillCounts,
   selectedAgent,
   onSelectAgent,
@@ -236,13 +236,13 @@ function LeftSidebar({
       </div>
 
       {/* Tools / Agents section */}
-      {agentsWithSkills.length > 0 && (
+      {toolAgents.length > 0 && (
         <div className="px-3 pt-3 pb-2">
           <h3 className="text-[10px] uppercase tracking-widest font-semibold text-muted mb-2 px-2">
             {t("Tools")}
           </h3>
           <nav className="flex flex-col gap-0.5">
-            {agentsWithSkills.map((agent) => (
+            {toolAgents.map((agent) => (
               <button
                 key={agent.name}
                 onClick={() => {
@@ -1829,11 +1829,6 @@ export function Home() {
     return counts
   }, [collections, skills])
 
-  // Only show agents that actually have skills
-  const agentsWithSkills = useMemo(() => {
-    return agents.filter((a) => (agentSkillCounts[a.displayName] || 0) > 0)
-  }, [agents, agentSkillCounts])
-
   // Count favorites that are currently installed (orphan favorites are
   // preserved in the DB but not shown in the sidebar count).
   const installedFavoritesCount = useMemo(
@@ -2262,10 +2257,13 @@ export function Home() {
   return (
     <div className="flex h-full">
       {/* Column 1: Left sidebar (filter panel) */}
+      {/* Every detected tool is listed, empty ones included: a row is a
+          drag-and-drop install target, so filtering by skill count would hide the
+          only way to give a fresh tool its first skill. */}
       <MemoizedLeftSidebar
         totalSkillCount={skills.length}
         favoritesCount={installedFavoritesCount}
-        agentsWithSkills={agentsWithSkills}
+        toolAgents={agents}
         agentSkillCounts={agentSkillCounts}
         selectedAgent={selectedAgent}
         onSelectAgent={setSelectedAgent}
