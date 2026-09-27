@@ -225,6 +225,21 @@ export const agents: Record<string, AgentConfig> = {
       (await dirExists("/Applications/CodeBuddy CN.app")),
   },
 
+  // Huawei's CodeArts Doer. Its CLI (`codearts`) is an opencode bundle, but the
+  // launcher sets PLUGIN_ENV=hc + SCENARIO=codeartsdoer, which switches the skill
+  // resolver off `~/.config/opencode/skills` and onto `~/.<scenario>/skills`.
+  // The built-in skills it ships live in `~/.codeartsdoer/cli-data/system/skills`
+  // and are not ours to touch.
+  codeartsdoer: {
+    name: "codeartsdoer",
+    displayName: "CodeArts Doer",
+    skillsDir: ".codeartsdoer/skills",
+    globalSkillsDir: path.join(home, ".codeartsdoer", "skills"),
+    detectInstalled: async () =>
+      (await dirExists(path.join(home, ".codeartsdoer"))) ||
+      (await commandExists("codearts")),
+  },
+
   goose: {
     name: "goose",
     displayName: "Goose",

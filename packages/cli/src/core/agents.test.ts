@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
 import { agents } from "./agents.js";
 import type { AgentType } from "../types.js";
 
@@ -49,9 +51,44 @@ describe("agents registry", () => {
     }
   });
 
-  it("should register 30 total coding agents", () => {
+  it("should register 31 total coding agents", () => {
     const keys = Object.keys(agents);
-    assert.equal(keys.length, 30, `Expected 30 agents registered, found ${keys.length}`);
+    assert.equal(keys.length, 31, `Expected 31 agents registered, found ${keys.length}`);
+  });
+
+  it("should keep CodeArts Doer out of OpenCode's skills dirs", async () => {
+    // `codearts` is an opencode bundle, so the tempting config is opencode's own.
+    // The launcher sets PLUGIN_ENV=hc + SCENARIO=codeartsdoer, which makes the
+    // resolver use ~/.codeartsdoer/skills instead, and the built-in skills it
+    // ships are a separate read-only tree under ~/.codeartsdoer/cli-data.
+    assert.ok(
+      agents.codeartsdoer,
+      "codeartsdoer should be present in agents registry",
+    );
+    assert.equal(agents.codeartsdoer.name, "codeartsdoer");
+    assert.ok(agents.codeartsdoer.displayName.length > 0);
+    assert.equal(typeof agents.codeartsdoer.detectInstalled, "function");
+    assert.equal(
+      agents.codeartsdoer.globalSkillsDir,
+      path.join(os.homedir(), ".codeartsdoer", "skills"),
+      `codeartsdoer should own ~/.codeartsdoer/skills, got ${agents.codeartsdoer.globalSkillsDir}`,
+    );
+    assert.notEqual(
+      agents.codeartsdoer.globalSkillsDir,
+      agents.opencode.globalSkillsDir,
+      'codeartsdoer must not claim OpenCode\'s skills dir',
+    );
+    assert.ok(
+      !agents.codeartsdoer.skillsDir.includes("opencode"),
+      `project dir should be .codeartsdoer/skills, got ${agents.codeartsdoer.skillsDir}`,
+    );
+    assert.ok(
+      !agents.codeartsdoer.globalSkillsDir.includes("cli-data"),
+      "must not point at the built-in system skills tree",
+    );
+    // Not asserted as `true`: detection depends on the developer's machine, and
+    // the suite runs everywhere (same reason the smoke test only checks the type).
+    assert.equal(typeof (await agents.codeartsdoer.detectInstalled()), "boolean");
   });
 
   it("should treat the three Antigravity interfaces as separate tools", () => {

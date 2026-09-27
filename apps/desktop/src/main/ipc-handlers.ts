@@ -258,6 +258,18 @@ const agentRegistry: Record<string, AgentEntry> = {
       (await dirExists(path.join(home, ".codebuddy-cn"))) ||
       (await dirExists("/Applications/CodeBuddy CN.app")),
   },
+  // Mirrors packages/cli/src/core/agents.ts: CodeArts Doer's CLI is an opencode
+  // bundle, but PLUGIN_ENV=hc moves its skills dir to ~/.codeartsdoer/skills, so
+  // it must not be pointed at opencode's path.
+  codeartsdoer: {
+    name: "codeartsdoer",
+    displayName: "CodeArts Doer",
+    shortCode: "CDR",
+    globalSkillsDir: path.join(home, ".codeartsdoer", "skills"),
+    detectInstalled: async () =>
+      (await dirExists(path.join(home, ".codeartsdoer"))) ||
+      (await commandExists("codearts")),
+  },
   goose: {
     name: "goose",
     displayName: "Goose",
@@ -441,6 +453,7 @@ const PROJECT_PROBES = [
   { subpath: ".codebuddy/skills" },
   { subpath: ".codebuddy-cn/skills" },
   { subpath: ".codebuddycn/skills" },
+  { subpath: ".codeartsdoer/skills" },
   { subpath: ".codex/skills" },
   { subpath: ".github/skills" },
   { subpath: ".windsurf/skills" },

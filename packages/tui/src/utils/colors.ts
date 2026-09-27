@@ -34,6 +34,7 @@ export const agentBadges: Record<string, { label: string; color: string }> = {
   cursor:           { label: "Cu", color: "#5599FF" }, // blue
   codebuddy:        { label: "CB", color: "#0052D9" }, // deep blue
   "codebuddy-cn":   { label: "CBN", color: "#165DFF" }, // bright blue
+  codeartsdoer:     { label: "CDR", color: "#E11D48" }, // rose — Huawei red
   windsurf:         { label: "W",  color: "#00CED1" }, // cyan
   "codex-cli":      { label: "Cx", color: "#FF4444" }, // red
   "droid-cli":      { label: "Dr", color: "#22D3EE" }, // cyan

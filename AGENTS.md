@@ -11,8 +11,8 @@ SkillsGate is a visual AI skill manager for coding agents across Desktop (Electr
 
 ---
 
-## 2. Supported Coding Agent Harnesses (30 Agents)
-SkillsGate provides unified skill discovery and synchronization across 30 agent targets.
+## 2. Supported Coding Agent Harnesses (31 Agents)
+SkillsGate provides unified skill discovery and synchronization across 31 agent targets.
 
 > **Core is not an agent.** `~/.agents/skills` is the shared core skill set that fans out into these tools — see §3. It appears in listings so core skills stay visible, but it is a *source*, never an install target.
 
@@ -46,6 +46,31 @@ SkillsGate provides unified skill discovery and synchronization across 30 agent 
 28. **Trae CN** (`trae-cn`, `TCN`, `.trae-cn/skills`, `~/.trae-cn/skills`)
 29. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
 30. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
+31. **CodeArts Doer** (`codeartsdoer`, `CDR`, `.codeartsdoer/skills`, `~/.codeartsdoer/skills`)
+
+#### CodeArts Doer is an opencode bundle, but not the OpenCode tool
+Huawei's `codearts` CLI (`~/.codeartsdoer/installers/codearts`) wraps opencode — its
+config even declares `"$schema": "https://opencode.ai/config.json"` — yet it does **not**
+read OpenCode's skills dir. The launcher script sets the branching environment, and the
+binary resolves the user scope accordingly:
+
+> `SCENARIO="codeartsdoer"` · `KERNEL_CONFIG_DIR="$HOME/.codeartsdoer"` · `PLUGIN_ENV="hc"` · `OPENCODE_CONFIG="$HOME/.codeartsdoer/codearts_cli.json"`
+>
+> `if (env === "hc" || PLUGIN_ENV === "hc") E = join(home, "." + scenario, "skills")`
+> `else                                   E = join(home, ".config", app,  "skills")`
+
+| Scope | Path under `PLUGIN_ENV=hc` |
+| --- | --- |
+| User (what SkillsGate manages) | `~/.codeartsdoer/skills` |
+| Project | `<repo>/.codeartsdoer/skills` |
+| Built-in, read-only | `~/.codeartsdoer/cli-data/system/skills` |
+
+- `codeartsdoer` must **never** share a `globalSkillsDir` with `opencode` (`~/.opencode/skills`)
+  or with `~/.config/opencode/skills` — pinned by `packages/cli/src/core/agents.test.ts`.
+- ⚠️ The `system/skills` tree ships with the product (9 entries + `SystemSkillStatus.txt`).
+  Same rule as `~/.gemini/<dir>/builtin/skills`: **leave it alone**.
+- Detection: `~/.codeartsdoer` existing, or `codearts` on PATH. The bin is `codearts`, *not*
+  `codeartsdoer`.
 
 #### The three Antigravity interfaces are three separate tools
 Google ships three Antigravity products, all of which can be installed at once, and the

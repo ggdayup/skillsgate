@@ -10,6 +10,7 @@ export type AgentType =
   | "cline"
   | "codebuddy"
   | "codebuddy-cn"
+  | "codeartsdoer"
   | "codex-cli"
   | "droid-cli"
   | "ob-1"

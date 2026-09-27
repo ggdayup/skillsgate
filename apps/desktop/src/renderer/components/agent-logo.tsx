@@ -2,6 +2,7 @@ import { memo, useMemo } from "react"
 import ampLogo from "../assets/agent-logos/amp.svg"
 import antigravityLogo from "../assets/agent-logos/antigravity.svg"
 import claudeLogo from "../assets/agent-logos/claude.svg"
+import codeartsdoerLogo from "../assets/agent-logos/codeartsdoer.svg"
 import codebuddyLogo from "../assets/agent-logos/codebuddy.svg"
 import codebuddyCnLogo from "../assets/agent-logos/codebuddy-cn.svg"
 import codexLogo from "../assets/agent-logos/codex.svg"
@@ -37,6 +38,9 @@ const AGENT_LOGOS: Record<string, string> = {
   "gemini-cli": geminiLogo,
   codebuddy: codebuddyLogo,
   "codebuddy-cn": codebuddyCnLogo,
+  // Built on opencode but shipped as its own product with its own config dir —
+  // deliberately not the OpenCode mark.
+  codeartsdoer: codeartsdoerLogo,
   opencode: opencodeLogo,
   openclaw: openclawLogo,
   pi: piLogo,
@@ -53,6 +57,7 @@ const AGENT_LOGO_FILTERS: Record<string, string> = {
   "gemini-cli": "none",
   codebuddy: "none",
   "codebuddy-cn": "none",
+  codeartsdoer: "none",
   mercury: "none",
   "ob-1": "none",
   pi: "none",
@@ -70,6 +75,7 @@ export const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   Cursor: "cursor",
   CodeBuddy: "codebuddy",
   "CodeBuddy CN": "codebuddy-cn",
+  "CodeArts Doer": "codeartsdoer",
   "GitHub Copilot": "github-copilot",
   Windsurf: "windsurf",
   Cline: "cline",
