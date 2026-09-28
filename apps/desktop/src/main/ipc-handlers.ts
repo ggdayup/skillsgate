@@ -57,6 +57,16 @@ import {
   type CoreAgent,
   type CoreInstallOptions,
 } from "./core-skills"
+import {
+  ensurePersistentRepo,
+  syncGitRepo,
+  takeoverStaticStoreSkill,
+  createStoreSymlink,
+  getGitCommit,
+  isGitDirty,
+  gitPull,
+  realpathOrResolve,
+} from "./git-repo"
 
 // ---------------------------------------------------------------------------
 // Agent registry (mirrored from packages/cli/src/core/agents.ts)
@@ -1282,173 +1292,6 @@ async function rescanSingleSkill(changedPath: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Git helpers for persistent repository management
-// ---------------------------------------------------------------------------
-
-function gitExec(
-  args: string[],
-  cwd?: string,
-  timeout = 60_000,
-): Promise<{ success: boolean; stdout: string; stderr: string; error?: string }> {
-  return new Promise((resolve) => {
-    execFile(
-      "git",
-      args,
-      { cwd, timeout, env: buildCliEnv() },
-      (error, stdout, stderr) => {
-        if (error) {
-          resolve({
-            success: false,
-            stdout: stdout ? stdout.toString() : "",
-            stderr: stderr ? stderr.toString() : "",
-            error: error.message,
-          })
-        } else {
-          resolve({
-            success: true,
-            stdout: stdout ? stdout.toString() : "",
-            stderr: stderr ? stderr.toString() : "",
-          })
-        }
-      },
-    )
-  })
-}
-
-function gitClone(
-  url: string,
-  dest: string,
-  branch?: string,
-): Promise<{ success: boolean; error?: string }> {
-  const args = ["clone", "--depth", "1"]
-  if (branch) {
-    args.push("-b", branch)
-  }
-  args.push(url, dest)
-  return new Promise((resolve) => {
-    execFile(
-      "git",
-      args,
-      { timeout: 90_000, env: buildCliEnv() },
-      (error) => {
-        if (error) {
-          resolve({ success: false, error: error.message })
-        } else {
-          resolve({ success: true })
-        }
-      },
-    )
-  })
-}
-
-async function isGitDirty(repoDir: string): Promise<boolean> {
-  const res = await gitExec(["status", "--porcelain"], repoDir)
-  return res.success && res.stdout.trim().length > 0
-}
-
-async function gitPull(
-  repoDir: string,
-): Promise<{ success: boolean; error?: string; alreadyUpToDate?: boolean }> {
-  const dirty = await isGitDirty(repoDir)
-  if (dirty) {
-    return {
-      success: false,
-      error: "本地仓库存在未提交修改（Dirty），已跳过更新以防止覆盖。",
-    }
-  }
-  const res = await gitExec(["pull", "--ff-only"], repoDir)
-  if (!res.success) {
-    return { success: false, error: res.stderr || res.error || "Git pull 失败" }
-  }
-  const out = (res.stdout || "") + (res.stderr || "")
-  const alreadyUpToDate =
-    out.includes("Already up to date") || out.includes("已经是最新")
-  return { success: true, alreadyUpToDate }
-}
-
-async function getGitCommit(repoDir: string): Promise<string> {
-  const res = await gitExec(["rev-parse", "--short", "HEAD"], repoDir)
-  return res.success ? res.stdout.trim() : ""
-}
-
-async function ensurePersistentRepo(
-  parsed: ParsedSource,
-): Promise<{ success: boolean; repoDir: string; error?: string }> {
-  if (parsed.type !== "github" || !parsed.owner || !parsed.repo) {
-    return { success: false, repoDir: "", error: "Missing owner or repo in GitHub source." }
-  }
-  const repoName = `${sanitizeName(parsed.owner)}-${sanitizeName(parsed.repo)}`
-  const repoDir = path.join(STORE_REPOS_DIR, repoName)
-  await fs.mkdir(STORE_REPOS_DIR, { recursive: true })
-
-  const gitDir = path.join(repoDir, ".git")
-  if (await dirExists(gitDir)) {
-    // Already cloned. If clean, pull to refresh; if dirty, keep as is
-    const dirty = await isGitDirty(repoDir)
-    if (!dirty) {
-      await gitPull(repoDir).catch(() => {})
-    }
-    return { success: true, repoDir }
-  }
-
-  // If directory exists without .git (broken or partial), remove it
-  if (await pathExists(repoDir)) {
-    await fs.rm(repoDir, { recursive: true, force: true }).catch(() => {})
-  }
-
-  const cloneUrl = `${parsed.url}.git`
-  const cloneRes = await gitClone(cloneUrl, repoDir, parsed.ref)
-  if (!cloneRes.success) {
-    await fs.rm(repoDir, { recursive: true, force: true }).catch(() => {})
-    return { success: false, repoDir, error: cloneRes.error }
-  }
-
-  return { success: true, repoDir }
-}
-
-async function createStoreSymlink(repoSkillDir: string, canonicalDir: string): Promise<void> {
-  const srcReal = await realpathOrResolve(repoSkillDir)
-  const storeReal = await realpathOrResolve(CANONICAL_SKILLS_DIR)
-  const relPath = path.relative(storeReal, srcReal)
-  const type = process.platform === "win32" ? "junction" : undefined
-  try {
-    await fs.symlink(relPath, canonicalDir, type)
-  } catch {
-    await fs.symlink(srcReal, canonicalDir, type)
-  }
-}
-
-async function takeoverStaticStoreSkill(skillName: string, repoSkillDir: string): Promise<void> {
-  const safeName = sanitizeName(skillName)
-  const canonicalDir = path.join(CANONICAL_SKILLS_DIR, safeName)
-  try {
-    if (await pathExists(canonicalDir)) {
-      const lst = await fs.lstat(canonicalDir)
-      if (lst.isSymbolicLink()) {
-        const realTarget = await realpathOrResolve(canonicalDir)
-        const realRepoSkill = await realpathOrResolve(repoSkillDir)
-        if (realTarget !== realRepoSkill) {
-          await fs.unlink(canonicalDir)
-          await createStoreSymlink(repoSkillDir, canonicalDir)
-        }
-      } else {
-        // It's a real directory (old static copy) -> backup and replace with symlink
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-")
-        const backupPath = path.join(BACKUP_DIR, `store--${safeName}--${stamp}`)
-        await fs.mkdir(BACKUP_DIR, { recursive: true })
-        await movePath(canonicalDir, backupPath)
-        await createStoreSymlink(repoSkillDir, canonicalDir)
-      }
-    } else {
-      await fs.mkdir(CANONICAL_SKILLS_DIR, { recursive: true })
-      await createStoreSymlink(repoSkillDir, canonicalDir)
-    }
-  } catch (err) {
-    console.warn(`[store] Failed to takeover static skill ${safeName}:`, err)
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Source parser
 //
 // The real implementation lives in `@skillsgate/skill-sources`, shared with the
@@ -1619,14 +1462,6 @@ async function resolveSourceSkills(
 // Install skill files to an agent directory (symlink with copy fallback)
 // ---------------------------------------------------------------------------
 
-async function realpathOrResolve(dir: string): Promise<string> {
-  try {
-    return await fs.realpath(dir)
-  } catch {
-    return path.resolve(dir)
-  }
-}
-
 async function installSkillToAgent(
   skillDir: string,
   skillName: string,
@@ -1648,17 +1483,25 @@ async function installSkillToAgent(
       resolvedCanonical === resolvedAgent ||
       realAgentSkillsDir === realCanonicalDir
 
+    const canonicalLstat = await fs.lstat(canonicalDir).catch(() => null)
+    const isCanonicalSymlink = canonicalLstat?.isSymbolicLink() ?? false
+
     // If the agent's dir IS the store (realpath-equal), write files directly
     // instead of creating a self-referential symlink.
     if (isCanonicalAgent) {
-      // Copy skill files directly to the canonical dir
+      if (isCanonicalSymlink) {
+        // If canonicalDir is already a symlink (e.g. from GitHub persistent repo),
+        // preserve the symlink intact so git updates propagate live!
+        return { success: true }
+      }
+      // Copy skill files directly to the canonical dir only if it's a real directory
       await fs.rm(canonicalDir, { recursive: true, force: true }).catch(() => {})
       await fs.cp(skillDir, canonicalDir, { recursive: true })
       return { success: true }
     }
 
-    // Ensure canonical dir has the skill
-    if (!(await dirExists(canonicalDir))) {
+    // Ensure canonical dir has the skill if not already present or symlinked
+    if (!isCanonicalSymlink && !(await dirExists(canonicalDir))) {
       await fs.cp(skillDir, canonicalDir, { recursive: true })
     }
 
@@ -2274,16 +2117,12 @@ Add your skill instructions here.
         throw new Error(`克隆/拉取仓库失败: ${repoRes.error}`)
       }
       const repoDir = repoRes.repoDir
-
-      // Check dirty
-      const dirty = await isGitDirty(repoDir)
-      if (dirty) {
-        throw new Error("本地仓库存在未提交修改（Dirty），已跳过更新以防止覆盖。")
+      const syncRes = await syncGitRepo(repoDir)
+      if (syncRes.status === "dirty") {
+        throw new Error(syncRes.error || "本地仓库存在未提交修改（Dirty），已跳过更新以防止覆盖。")
       }
-
-      const pullRes = await gitPull(repoDir)
-      if (!pullRes.success) {
-        throw new Error(`Git pull 失败: ${pullRes.error}`)
+      if (syncRes.status === "error") {
+        throw new Error(`Git pull 失败: ${syncRes.error}`)
       }
 
       const discovered = await discoverSkillsInDir(repoDir)
@@ -2297,7 +2136,7 @@ Add your skill instructions here.
       const skillDir = path.dirname(target.filePath)
       await takeoverStaticStoreSkill(name, skillDir)
 
-      const commit = await getGitCommit(repoDir)
+      const commit = syncRes.commit || (await getGitCommit(repoDir))
 
       lock.skills[safeName] = {
         ...entry,
@@ -2316,11 +2155,12 @@ Add your skill instructions here.
       }
 
       await rescanAndCache().catch(() => undefined)
+      const isUpToDate = syncRes.status === "up-to-date"
       return {
         ok: true,
         commit,
-        alreadyUpToDate: pullRes.alreadyUpToDate,
-        message: pullRes.alreadyUpToDate ? "已经是最新版本" : `已更新至 ${commit}`,
+        alreadyUpToDate: isUpToDate,
+        message: isUpToDate ? "已经是最新版本" : `已更新至 ${commit}`,
       }
     } else {
       // Local source: refresh timestamp
@@ -2399,51 +2239,49 @@ Add your skill instructions here.
         }
       }
 
-      const dirty = await isGitDirty(repoDir)
-      if (dirty) {
+      const syncRes = await syncGitRepo(repoDir)
+      if (syncRes.status === "dirty") {
         results.push({
           repo: repoDir,
           name: repoDisplayName,
           status: "dirty",
-          error: "本地仓库存在未提交修改，已跳过更新以防止覆盖",
+          error: syncRes.error,
         })
         continue
       }
-
-      const pullRes = await gitPull(repoDir)
-      if (!pullRes.success) {
+      if (syncRes.status === "error") {
         results.push({
           repo: repoDir,
           name: repoDisplayName,
           status: "error",
-          error: pullRes.error,
+          error: syncRes.error,
         })
-      } else {
-        const commit = await getGitCommit(repoDir)
-        results.push({
-          repo: repoDir,
-          name: repoDisplayName,
-          status: pullRes.alreadyUpToDate ? "up-to-date" : "updated",
-          commit,
-        })
-        if (!pullRes.alreadyUpToDate) {
-          anyChanged = true
-        }
+        continue
+      }
 
-        try {
-          const discovered = await discoverSkillsInDir(repoDir)
-          for (const s of discovered) {
-            const sName = sanitizeName(s.name)
-            if (lock.skills[sName]) {
-              await takeoverStaticStoreSkill(s.name, path.dirname(s.filePath))
-              lock.skills[sName].repoPath = repoDir
-              lock.skills[sName].gitCommit = commit
-              lock.skills[sName].updatedAt = new Date().toISOString()
-            }
+      results.push({
+        repo: repoDir,
+        name: repoDisplayName,
+        status: syncRes.status,
+        commit: syncRes.commit,
+      })
+      if (syncRes.status === "updated") {
+        anyChanged = true
+      }
+
+      try {
+        const discovered = await discoverSkillsInDir(repoDir)
+        for (const s of discovered) {
+          const sName = sanitizeName(s.name)
+          if (lock.skills[sName]) {
+            await takeoverStaticStoreSkill(s.name, path.dirname(s.filePath))
+            lock.skills[sName].repoPath = repoDir
+            lock.skills[sName].gitCommit = syncRes.commit
+            lock.skills[sName].updatedAt = new Date().toISOString()
           }
-        } catch {
-          // ignore
         }
+      } catch {
+        // ignore
       }
     }
 
