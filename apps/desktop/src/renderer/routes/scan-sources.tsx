@@ -818,7 +818,7 @@ export function ScanSources() {
 
             {/* Error Message */}
             {addError && (
-              <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-400">
+              <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-400 whitespace-pre-line break-words font-mono">
                 {addError}
               </div>
             )}

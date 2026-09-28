@@ -48,7 +48,7 @@ async function dirExists(p: string): Promise<boolean> {
   }
 }
 
-const COMMON_BIN_DIRS =
+export const COMMON_BIN_DIRS =
   process.platform === "win32"
     ? [
         process.env.ProgramFiles && path.join(process.env.ProgramFiles, "Git", "cmd"),
@@ -74,7 +74,8 @@ export function buildCliEnv(): NodeJS.ProcessEnv {
   const currentPath = process.env.PATH?.split(path.delimiter) ?? []
   return {
     ...process.env,
-    PATH: dedupePathEntries([...currentPath, ...COMMON_BIN_DIRS]),
+    PATH: dedupePathEntries([...COMMON_BIN_DIRS, ...currentPath]),
+    GIT_TERMINAL_PROMPT: "0",
   }
 }
 
@@ -86,21 +87,58 @@ export function sanitizeName(name: string): string {
     .replace(/^-|-$/g, "")
 }
 
-export function gitExec(args: string[], cwd?: string): Promise<GitExecResult> {
+export function extractGitErrorMessage(
+  err: (Error & { killed?: boolean; signal?: NodeJS.Signals | string; code?: string | number }) | null,
+  stderr: string,
+  stdout = "",
+): string {
+  if (err?.killed || err?.signal === "SIGTERM" || err?.code === "ETIMEDOUT") {
+    return "Git 操作超时（请检查网络连接或 GitHub 访问情况，稍后重试）"
+  }
+
+  const rawStderr = stderr.trim()
+  if (!rawStderr) {
+    return err?.message || stdout.trim() || "未知 Git 执行错误"
+  }
+
+  const lines = rawStderr.split("\n").map((l) => l.trim()).filter(Boolean)
+  const meaningfulLines = lines.filter((line) => {
+    if (/^Cloning into\s+/i.test(line)) return false
+    if (/^Receiving objects:\s+/i.test(line)) return false
+    if (/^Resolving deltas:\s+/i.test(line)) return false
+    if (/^Updating files:\s+/i.test(line)) return false
+    if (/^remote:\s+(Enumerating|Counting|Compressing|Total)\b/i.test(line)) return false
+    return true
+  })
+
+  if (meaningfulLines.length > 0) {
+    return meaningfulLines.join("\n")
+  }
+
+  return err?.message || rawStderr
+}
+
+export function gitExec(
+  args: string[],
+  cwd?: string,
+  timeoutMs = 90_000,
+): Promise<GitExecResult> {
   return new Promise((resolve) => {
-    execFile("git", args, { cwd, timeout: 90_000, env: buildCliEnv() }, (err, stdout, stderr) => {
+    execFile("git", args, { cwd, timeout: timeoutMs, env: buildCliEnv() }, (err, stdout, stderr) => {
+      const outStr = stdout?.toString() || ""
+      const errStr = stderr?.toString() || ""
       if (err) {
         resolve({
           success: false,
-          stdout: stdout?.toString() || "",
-          stderr: stderr?.toString() || "",
-          error: stderr?.toString().trim() || err.message,
+          stdout: outStr,
+          stderr: errStr,
+          error: extractGitErrorMessage(err, errStr, outStr),
         })
       } else {
         resolve({
           success: true,
-          stdout: stdout?.toString() || "",
-          stderr: stderr?.toString() || "",
+          stdout: outStr,
+          stderr: errStr,
         })
       }
     })
@@ -111,6 +149,7 @@ export async function gitClone(
   cloneUrl: string,
   targetDir: string,
   ref?: string,
+  timeoutMs = 180_000,
 ): Promise<{ success: boolean; error?: string }> {
   const args = ["clone", "--depth", "1"]
   if (ref) {
@@ -120,7 +159,7 @@ export async function gitClone(
     args.push("--branch", ref)
   }
   args.push(cloneUrl, targetDir)
-  const res = await gitExec(args)
+  const res = await gitExec(args, undefined, timeoutMs)
   return { success: res.success, error: res.error }
 }
 
