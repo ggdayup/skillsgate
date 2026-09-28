@@ -97,6 +97,15 @@ async function dirExists(p: string): Promise<boolean> {
   }
 }
 
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function fileExists(p: string): Promise<boolean> {
   try {
     const stat = await fs.stat(p)
@@ -1363,9 +1372,9 @@ async function getGitCommit(repoDir: string): Promise<string> {
 }
 
 async function ensurePersistentRepo(
-  parsed: ParsedSource & { type: "github"; owner?: string; repo?: string },
+  parsed: ParsedSource,
 ): Promise<{ success: boolean; repoDir: string; error?: string }> {
-  if (!parsed.owner || !parsed.repo) {
+  if (parsed.type !== "github" || !parsed.owner || !parsed.repo) {
     return { success: false, repoDir: "", error: "Missing owner or repo in GitHub source." }
   }
   const repoName = `${sanitizeName(parsed.owner)}-${sanitizeName(parsed.repo)}`

@@ -32,6 +32,11 @@ const INSTALL_COMMAND_HINT =
  */
 const LOCAL_PATH_HINT = /^\s*(?:~\/\S|\/\S|[A-Za-z]:[\\/]\S)/
 
+/**
+ * Third trigger: a typed/pasted GitHub repository URL (e.g. https://github.com/owner/repo...).
+ */
+const GITHUB_URL_HINT = /^\s*(?:https?:\/\/)?(?:www\.)?github\.com\/[^\s/]+\/[^\s/]+/i
+
 // ---------------------------------------------------------------------------
 // Types matching the skills.sh response shape
 // ---------------------------------------------------------------------------
@@ -929,7 +934,9 @@ export function Discover() {
   // Uses the live `searchQuery`, not the deferred value, so the panel appears
   // the moment the command is pasted.
   const isInstallCommand =
-    INSTALL_COMMAND_HINT.test(searchQuery) || LOCAL_PATH_HINT.test(searchQuery)
+    INSTALL_COMMAND_HINT.test(searchQuery) ||
+    LOCAL_PATH_HINT.test(searchQuery) ||
+    GITHUB_URL_HINT.test(searchQuery)
 
   const getCachedContent = useCallback((key: string) => {
     return contentCacheRef.current.get(key)
