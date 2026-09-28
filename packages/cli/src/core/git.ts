@@ -110,3 +110,49 @@ export async function cleanupTempDir(dir: string): Promise<void> {
     // Best effort cleanup
   }
 }
+
+/**
+ * Clones or updates a GitHub repo in persistent store: ~/.agents/.store/repos/{owner}-{repo}.
+ */
+export async function ensurePersistentRepo(source: ParsedSource): Promise<string> {
+  const { STORE_REPOS_DIR } = await import("../constants.js");
+  const { sanitizeName } = await import("./installer.js");
+  const { dirExists } = await import("../utils/fs.js");
+
+  const storeReposDir = STORE_REPOS_DIR();
+  await fs.mkdir(storeReposDir, { recursive: true });
+
+  const owner = source.owner || "unknown";
+  const repo = source.repo || "unknown";
+  const repoName = `${sanitizeName(owner)}-${sanitizeName(repo)}`;
+  const repoDir = path.join(storeReposDir, repoName);
+
+  const git: SimpleGit = simpleGit();
+  const gitDir = path.join(repoDir, ".git");
+
+  if (await dirExists(gitDir)) {
+    const gitInstance = simpleGit({ baseDir: repoDir });
+    const status = await gitInstance.status();
+    if (status.isClean()) {
+      await gitInstance.pull(["--ff-only"]).catch(() => {});
+    }
+    return repoDir;
+  }
+
+  // Clone if not exists
+  const cloneUrl = `${source.url}.git`;
+  const cloneOptions = ["--depth", "1"];
+  if (source.ref) {
+    if (!/^[a-zA-Z0-9._\/-]+$/.test(source.ref)) {
+      throw new GitCloneError(`Invalid ref format: "${source.ref}"`);
+    }
+    cloneOptions.push("--branch", source.ref);
+  }
+
+  if (await dirExists(repoDir)) {
+    await fs.rm(repoDir, { recursive: true, force: true }).catch(() => {});
+  }
+
+  await git.clone(cloneUrl, repoDir, cloneOptions);
+  return repoDir;
+}

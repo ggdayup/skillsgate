@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   }) => ipcRenderer.invoke("skills:create", data),
   removeSkill: (name: string) => ipcRenderer.invoke("skills:remove", name),
   updateSkill: (name: string) => ipcRenderer.invoke("skills:update", name),
+  updateAllGitSkills: () => ipcRenderer.invoke("skills:update-all-git"),
   readSkillContent: (skillPath: string) =>
     ipcRenderer.invoke("skill:read-content", skillPath),
   listSupportingFiles: (skillPath: string) =>

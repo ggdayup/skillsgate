@@ -75,6 +75,9 @@ export interface SkillLockEntry {
   skillFolderHash: string;
   installedAt: string;
   updatedAt: string;
+  repoPath?: string;
+  subPath?: string;
+  gitCommit?: string;
 }
 
 export interface SkillLockFile {

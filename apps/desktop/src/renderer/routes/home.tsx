@@ -57,6 +57,27 @@ function SearchIcon({ size = 16 }: { size?: number }) {
   )
 }
 
+function RefreshIcon({ size = 14, spinning = false }: { size?: number; spinning?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={spinning ? "animate-spin" : ""}
+    >
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M8 16H3v5" />
+    </svg>
+  )
+}
+
 function SkillsGateIcon() {
   return (
     <svg width="48" height="48" viewBox="0 0 64 64" className="text-muted">
@@ -535,6 +556,8 @@ interface MiddlePanelProps {
   onBulkCreateCollection: () => void
   onBulkDelete: () => void
   listRef: React.RefObject<HTMLDivElement | null>
+  onUpdateAllGit?: () => void
+  updatingAllGit?: boolean
 }
 
 function MiddlePanel({
@@ -564,6 +587,8 @@ function MiddlePanel({
   onBulkCreateCollection,
   onBulkDelete,
   listRef,
+  onUpdateAllGit,
+  updatingAllGit,
 }: MiddlePanelProps) {
   const [showCollectionDropdown, setShowCollectionDropdown] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -615,12 +640,24 @@ function MiddlePanel({
       <div className="p-3 border-b border-border">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-[10px] uppercase tracking-widest text-muted">{t("Local Library")}</p>
-          <button
-            onClick={onCreateSkill}
-            className="rounded-md border border-border px-2 py-1 text-[11px] text-foreground hover:bg-surface-hover"
-          >
-            {t("New Skill")}
-          </button>
+          <div className="flex items-center gap-1.5">
+            {onUpdateAllGit && (
+              <button
+                onClick={onUpdateAllGit}
+                disabled={updatingAllGit}
+                title={t("Update all Git skills")}
+                className="rounded-md border border-border p-1 text-[11px] text-muted hover:text-foreground hover:bg-surface-hover transition-colors"
+              >
+                <RefreshIcon spinning={updatingAllGit} size={13} />
+              </button>
+            )}
+            <button
+              onClick={onCreateSkill}
+              className="rounded-md border border-border px-2 py-1 text-[11px] text-foreground hover:bg-surface-hover"
+            >
+              {t("New Skill")}
+            </button>
+          </div>
         </div>
         <div className="relative">
           <div className="absolute inset-y-0 left-2.5 flex items-center pointer-events-none">
@@ -1029,6 +1066,8 @@ function RightPanel({
   const [selectedSupportingFile, setSelectedSupportingFile] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [showRemoveDialog, setShowRemoveDialog] = useState(false)
+  const [updating, setUpdating] = useState(false)
+  const [updateFeedback, setUpdateFeedback] = useState<string | null>(null)
   const editorRef = useRef<SkillEditorHandle | null>(null)
 
   // Reset edit mode when skill changes
@@ -1038,7 +1077,30 @@ function RightPanel({
     setSelectedSupportingFile(null)
     setSaveStatus("idle")
     setShowRemoveDialog(false)
+    setUpdating(false)
+    setUpdateFeedback(null)
   }, [skill?.canonicalPath])
+
+  const handleUpdate = async () => {
+    if (!skill || updating) return
+    setUpdating(true)
+    setUpdateFeedback(null)
+    try {
+      const res = await electronAPI.updateSkill(skill.name)
+      if (res.alreadyUpToDate) {
+        setUpdateFeedback(t("Already up to date"))
+      } else if (res.commit) {
+        setUpdateFeedback(`${t("Updated to")} ${res.commit}`)
+      } else {
+        setUpdateFeedback(res.message || t("Updated"))
+      }
+      setTimeout(() => setUpdateFeedback(null), 3500)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUpdating(false)
+    }
+  }
 
   useEffect(() => {
     if (!skill?.path || supportingFiles.length === 0) {
@@ -1247,6 +1309,25 @@ function RightPanel({
                       {t("Edit")}
                     </button>
                   </div>
+                )}
+
+                {/* Update feedback */}
+                {updateFeedback && (
+                  <span className="text-[11px] text-emerald-600 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5">
+                    {updateFeedback}
+                  </span>
+                )}
+
+                {/* Pull / Update from GitHub */}
+                {isLocalSkill && skill.sourceType === "github" && (
+                  <button
+                    onClick={handleUpdate}
+                    disabled={updating}
+                    title={t("Pull latest from GitHub")}
+                    className="p-1.5 rounded-md text-muted hover:text-foreground hover:bg-surface-hover transition-colors flex items-center gap-1"
+                  >
+                    <RefreshIcon spinning={updating} size={14} />
+                  </button>
                 )}
 
                 {/* Open in Finder */}
@@ -1642,6 +1723,31 @@ export function Home() {
         : null,
     [selectedSkillPath, skills],
   )
+
+  const [updatingAllGit, setUpdatingAllGit] = useState(false)
+
+  const handleUpdateAllGit = async () => {
+    if (updatingAllGit) return
+    setUpdatingAllGit(true)
+    try {
+      const results = await electronAPI.updateAllGitSkills()
+      const updated = results.filter((r) => r.status === "updated").length
+      const upToDate = results.filter((r) => r.status === "up-to-date").length
+      const dirty = results.filter((r) => r.status === "dirty").length
+      const error = results.filter((r) => r.status === "error").length
+
+      const lines = [`${t("Git skills updated")}:`]
+      lines.push(`• ${t("Updated")}: ${updated}`)
+      lines.push(`• ${t("Already up to date")}: ${upToDate}`)
+      if (dirty > 0) lines.push(`• ${t("Skipped (dirty)")}: ${dirty}`)
+      if (error > 0) lines.push(`• ${t("Failed")}: ${error}`)
+      alert(lines.join("\n"))
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUpdatingAllGit(false)
+    }
+  }
 
   // Load agents and skills on mount
   useEffect(() => {
@@ -2311,6 +2417,8 @@ export function Home() {
         onBulkCreateCollection={handleBulkCreateCollection}
         onBulkDelete={handleBulkDelete}
         listRef={skillListRef}
+        onUpdateAllGit={handleUpdateAllGit}
+        updatingAllGit={updatingAllGit}
       />
 
       {/* Column 3: Skill detail */}

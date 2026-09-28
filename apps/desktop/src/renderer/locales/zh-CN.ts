@@ -170,6 +170,7 @@ export const zhCN: Record<string, string> = {
   selected: "已选",
   "fans out to every detected tool": "将分发到所有已检测到的工具",
   "Symlink — edits to the source apply live": "软链——源目录改动即时生效",
+  "Symlink — updates via git apply live": "软链——Git 更新时实时生效",
   "Copy — detach from the source folder": "复制——与源目录脱钩",
   "Replace in Core (backs up the old entry)": "替换核心中的同名项（自动备份旧条目）",
   "Broken links in Core": "核心中的断链",
@@ -177,6 +178,14 @@ export const zhCN: Record<string, string> = {
     "这些核心条目软链指向已不存在的目录。可用新路径重新添加该技能，或移除失效链接。",
   "Copy — then paste it into the search box to install":
     "复制——然后粘贴到搜索框即可安装",
+  "Update all Git skills": "更新所有 Git 技能",
+  "Pull latest from GitHub": "从 GitHub 拉取最新",
+  "Already up to date": "已经是最新版本",
+  "Updated to": "已更新至",
+  Updated: "已更新",
+  "Git skills updated": "Git 技能更新完成",
+  "Skipped (dirty)": "跳过（有未提交改动）",
+  Failed: "失败",
 
   // Core skill set
   Core: "核心",

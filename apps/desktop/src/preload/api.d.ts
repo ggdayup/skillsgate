@@ -243,7 +243,18 @@ declare global {
       agentNames?: string[]
     }) => Promise<{ name: string; path: string; targets: string[] }>
     removeSkill: (name: string) => Promise<void>
-    updateSkill: (name: string) => Promise<void>
+    updateSkill: (
+      name: string,
+    ) => Promise<{ ok: boolean; commit?: string; alreadyUpToDate?: boolean; message?: string }>
+    updateAllGitSkills: () => Promise<
+      Array<{
+        repo: string
+        name: string
+        status: "updated" | "up-to-date" | "dirty" | "error"
+        commit?: string
+        error?: string
+      }>
+    >
     readSkillContent: (path: string) => Promise<string>
     listSupportingFiles: (
       path: string,

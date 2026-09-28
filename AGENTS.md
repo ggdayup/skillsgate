@@ -211,11 +211,19 @@ developing in. In Core mode a local source offers **symlink (default) vs copy**:
 the symlink lives in `~/.agents/skills` pointing at the source, so edits apply
 live; if the source moves away it surfaces in `findDanglingCoreEntries()` on the
 `/core` page. `./` and `../` are rejected in main — the app's cwd is not a
-meaningful base for a GUI user. GitHub sources always copy (the temp clone is
-deleted). Same-name core entries are refused with a replace-and-retry that
-backs the old one up to `.backup/`. The CLI has no path form yet
-(bean `skillsgate-e9iw`); the desktop's `installDirToCore` gained
-`{ mode, replace }` ahead of the mirror.
+meaningful base for a GUI user.
+- **Persistent GitHub Repository Store (`~/.agents/.store/repos`)**:
+  GitHub sources clone persistently to `~/.agents/.store/repos/{owner}-{repo}` instead
+  of ephemeral temp folders. Skills within the repo can be symlinked into the canonical
+  store (`~/.agents/.store/{skill}`) and Core (`~/.agents/skills/{skill}`) so that on-demand
+  `git pull` updates propagate immediately across all harnesses.
+  - **Dirty Tree Protection**: Before pulling, `git status --porcelain` is checked.
+    If uncommitted local edits exist, the pull is skipped and alerted to prevent clobbering.
+  - **Static Store Takeover**: If a skill was previously copied as a static directory into
+    `~/.agents/.store/{skill}`, taking over with a GitHub persistent repo automatically backs
+    up the static folder to `~/.agents/.backup/` before replacing it with the symlink.
+  - Same-name core entries still trigger replace-and-retry backing up the old one to `.backup/`.
+
 
 - **The pasted string is never executed.** `parseInstallCommand()` lives in
   `packages/skill-sources/src/parse-install-command.ts` — the

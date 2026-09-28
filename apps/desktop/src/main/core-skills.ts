@@ -135,7 +135,7 @@ export function sanitizeName(name: string): string {
     .replace(/^-+|-+$/g, "")
 }
 
-async function movePath(src: string, dst: string): Promise<void> {
+export async function movePath(src: string, dst: string): Promise<void> {
   try {
     await fs.rename(src, dst)
     return

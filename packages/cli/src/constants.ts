@@ -21,6 +21,7 @@ export const CLAUDE_PLUGIN_DIR = ".claude-plugin";
 // ~/.agents/.backup  -> originals displaced by an explicit "replace" on conflict.
 
 export const STORE_SUBDIR = ".store";
+export const REPOS_SUBDIR = "repos";
 export const BACKUP_SUBDIR = ".backup";
 export const CORE_CONFIG_NAME = "core.json";
 export const CORE_CONFIG_VERSION = 1;
@@ -34,6 +35,10 @@ export const GLOBAL_LOCK_PATH = () =>
  */
 export const CANONICAL_SKILLS_DIR = () =>
   path.join(os.homedir(), AGENTS_DIR, STORE_SUBDIR);
+
+/** Persistent local Git repositories for cloned skill sources. */
+export const STORE_REPOS_DIR = () =>
+  path.join(CANONICAL_SKILLS_DIR(), REPOS_SUBDIR);
 
 /** The core skill set. Everything here fans out to every detected agent. */
 export const CORE_SKILLS_DIR = () =>

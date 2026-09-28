@@ -110,6 +110,7 @@ export function InstallFromCommand({
   const skills = preview?.skills ?? []
   const allSelected = skills.length > 0 && selected.size === skills.length
   const isLocalSource = preview?.sourceType === "local"
+  const isGitHubSource = preview?.sourceType === "github"
   const canInstall =
     phase === "ready" &&
     selected.size > 0 &&
@@ -135,7 +136,7 @@ export function InstallFromCommand({
     try {
       if (useCore) {
         const out = await electronAPI.coreInstall(preview.label, names, {
-          mode: isLocalSource && linkMode ? "link" : "copy",
+          mode: linkMode ? "link" : "copy",
           replace,
         })
         const conflictNames = out.filter((r) => r.conflict).map((r) => r.name)
@@ -289,13 +290,15 @@ export function InstallFromCommand({
                 </span>
               </label>
 
-              {useCore && isLocalSource && (
+              {useCore && (isLocalSource || isGitHubSource) && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {(
                     [
                       {
                         on: linkMode,
-                        label: t("Symlink — edits to the source apply live"),
+                        label: isLocalSource
+                          ? t("Symlink — edits to the source apply live")
+                          : t("Symlink — updates via git apply live"),
                         set: () => setLinkMode(true),
                       },
                       {

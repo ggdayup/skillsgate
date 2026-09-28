@@ -34,9 +34,11 @@ import { planPush, applyPush } from "./db/push"
 import type { PushPreview } from "./db/push"
 import { checkForAppUpdates, getUpdateState, quitAndInstallUpdate } from "./auto-updater"
 import {
+  BACKUP_DIR,
   CANONICAL_SKILLS_DIR,
   CORE_SKILLS_DIR,
   SKILL_ROOTS,
+  STORE_REPOS_DIR,
 } from "./skill-paths"
 import {
   applyCoreSync,
@@ -45,6 +47,7 @@ import {
   getCoreSummary,
   installDirToCore,
   listCoreEntries,
+  movePath,
   planCoreSync,
   promoteToCore,
   readCoreConfig,
@@ -401,6 +404,9 @@ interface SkillLockEntry {
   skillFolderHash: string
   installedAt: string
   updatedAt: string
+  repoPath?: string
+  subPath?: string
+  gitCommit?: string
 }
 
 interface SkillLockFile {
@@ -1267,18 +1273,54 @@ async function rescanSingleSkill(changedPath: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Git clone helper (uses system git to avoid simple-git dependency)
+// Git helpers for persistent repository management
 // ---------------------------------------------------------------------------
+
+function gitExec(
+  args: string[],
+  cwd?: string,
+  timeout = 60_000,
+): Promise<{ success: boolean; stdout: string; stderr: string; error?: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      args,
+      { cwd, timeout, env: buildCliEnv() },
+      (error, stdout, stderr) => {
+        if (error) {
+          resolve({
+            success: false,
+            stdout: stdout ? stdout.toString() : "",
+            stderr: stderr ? stderr.toString() : "",
+            error: error.message,
+          })
+        } else {
+          resolve({
+            success: true,
+            stdout: stdout ? stdout.toString() : "",
+            stderr: stderr ? stderr.toString() : "",
+          })
+        }
+      },
+    )
+  })
+}
 
 function gitClone(
   url: string,
   dest: string,
+  branch?: string,
 ): Promise<{ success: boolean; error?: string }> {
+  const args = ["clone", "--depth", "1"]
+  if (branch) {
+    args.push("-b", branch)
+  }
+  args.push(url, dest)
   return new Promise((resolve) => {
     execFile(
       "git",
-      ["clone", "--depth", "1", url, dest],
-      { timeout: 60_000, env: buildCliEnv() },
+      args,
+      { timeout: 90_000, env: buildCliEnv() },
       (error) => {
         if (error) {
           resolve({ success: false, error: error.message })
@@ -1288,6 +1330,113 @@ function gitClone(
       },
     )
   })
+}
+
+async function isGitDirty(repoDir: string): Promise<boolean> {
+  const res = await gitExec(["status", "--porcelain"], repoDir)
+  return res.success && res.stdout.trim().length > 0
+}
+
+async function gitPull(
+  repoDir: string,
+): Promise<{ success: boolean; error?: string; alreadyUpToDate?: boolean }> {
+  const dirty = await isGitDirty(repoDir)
+  if (dirty) {
+    return {
+      success: false,
+      error: "本地仓库存在未提交修改（Dirty），已跳过更新以防止覆盖。",
+    }
+  }
+  const res = await gitExec(["pull", "--ff-only"], repoDir)
+  if (!res.success) {
+    return { success: false, error: res.stderr || res.error || "Git pull 失败" }
+  }
+  const out = (res.stdout || "") + (res.stderr || "")
+  const alreadyUpToDate =
+    out.includes("Already up to date") || out.includes("已经是最新")
+  return { success: true, alreadyUpToDate }
+}
+
+async function getGitCommit(repoDir: string): Promise<string> {
+  const res = await gitExec(["rev-parse", "--short", "HEAD"], repoDir)
+  return res.success ? res.stdout.trim() : ""
+}
+
+async function ensurePersistentRepo(
+  parsed: ParsedSource & { type: "github"; owner?: string; repo?: string },
+): Promise<{ success: boolean; repoDir: string; error?: string }> {
+  if (!parsed.owner || !parsed.repo) {
+    return { success: false, repoDir: "", error: "Missing owner or repo in GitHub source." }
+  }
+  const repoName = `${sanitizeName(parsed.owner)}-${sanitizeName(parsed.repo)}`
+  const repoDir = path.join(STORE_REPOS_DIR, repoName)
+  await fs.mkdir(STORE_REPOS_DIR, { recursive: true })
+
+  const gitDir = path.join(repoDir, ".git")
+  if (await dirExists(gitDir)) {
+    // Already cloned. If clean, pull to refresh; if dirty, keep as is
+    const dirty = await isGitDirty(repoDir)
+    if (!dirty) {
+      await gitPull(repoDir).catch(() => {})
+    }
+    return { success: true, repoDir }
+  }
+
+  // If directory exists without .git (broken or partial), remove it
+  if (await pathExists(repoDir)) {
+    await fs.rm(repoDir, { recursive: true, force: true }).catch(() => {})
+  }
+
+  const cloneUrl = `${parsed.url}.git`
+  const cloneRes = await gitClone(cloneUrl, repoDir, parsed.ref)
+  if (!cloneRes.success) {
+    await fs.rm(repoDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, repoDir, error: cloneRes.error }
+  }
+
+  return { success: true, repoDir }
+}
+
+async function createStoreSymlink(repoSkillDir: string, canonicalDir: string): Promise<void> {
+  const srcReal = await realpathOrResolve(repoSkillDir)
+  const storeReal = await realpathOrResolve(CANONICAL_SKILLS_DIR)
+  const relPath = path.relative(storeReal, srcReal)
+  const type = process.platform === "win32" ? "junction" : undefined
+  try {
+    await fs.symlink(relPath, canonicalDir, type)
+  } catch {
+    await fs.symlink(srcReal, canonicalDir, type)
+  }
+}
+
+async function takeoverStaticStoreSkill(skillName: string, repoSkillDir: string): Promise<void> {
+  const safeName = sanitizeName(skillName)
+  const canonicalDir = path.join(CANONICAL_SKILLS_DIR, safeName)
+  try {
+    if (await pathExists(canonicalDir)) {
+      const lst = await fs.lstat(canonicalDir)
+      if (lst.isSymbolicLink()) {
+        const realTarget = await realpathOrResolve(canonicalDir)
+        const realRepoSkill = await realpathOrResolve(repoSkillDir)
+        if (realTarget !== realRepoSkill) {
+          await fs.unlink(canonicalDir)
+          await createStoreSymlink(repoSkillDir, canonicalDir)
+        }
+      } else {
+        // It's a real directory (old static copy) -> backup and replace with symlink
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+        const backupPath = path.join(BACKUP_DIR, `store--${safeName}--${stamp}`)
+        await fs.mkdir(BACKUP_DIR, { recursive: true })
+        await movePath(canonicalDir, backupPath)
+        await createStoreSymlink(repoSkillDir, canonicalDir)
+      }
+    } else {
+      await fs.mkdir(CANONICAL_SKILLS_DIR, { recursive: true })
+      await createStoreSymlink(repoSkillDir, canonicalDir)
+    }
+  } catch (err) {
+    console.warn(`[store] Failed to takeover static skill ${safeName}:`, err)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1407,16 +1556,13 @@ async function resolveSourceSkills(
   }
 
   let sourceDir: string
-  let tmpDir: string | null = null
 
   if (parsed.type === "github") {
-    tmpDir = path.join(os.tmpdir(), `skillsgate-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`)
-    const cloneResult = await gitClone(`${parsed.url}.git`, tmpDir)
-    if (!cloneResult.success) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-      return { ok: false, error: `Clone failed: ${cloneResult.error}` }
+    const repoRes = await ensurePersistentRepo(parsed)
+    if (!repoRes.success) {
+      return { ok: false, error: `克隆/拉取仓库失败: ${repoRes.error}` }
     }
-    sourceDir = tmpDir
+    sourceDir = repoRes.repoDir
   } else {
     sourceDir = parsed.url
     const problem = await describeLocalPathProblem(sourceDir)
@@ -1437,9 +1583,6 @@ async function resolveSourceSkills(
       : discovered.filter((skill) => wanted.has(skill.name.toLowerCase()))
 
   if (skills.length === 0) {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-    }
     return {
       ok: false,
       error:
@@ -1458,11 +1601,7 @@ async function resolveSourceSkills(
     value: {
       parsed,
       skills,
-      cleanup: async () => {
-        if (tmpDir) {
-          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-        }
-      },
+      cleanup: async () => {},
     },
   }
 }
@@ -1793,6 +1932,10 @@ export function registerIpcHandlers(): void {
       for (const skill of discovered) {
         const skillDir = path.dirname(skill.filePath)
 
+        if (parsed.type === "github") {
+          await takeoverStaticStoreSkill(skill.name, skillDir)
+        }
+
         for (const agent of targetAgents) {
           const result = await installSkillToAgent(skillDir, skill.name, agent)
           results.push({
@@ -1806,6 +1949,12 @@ export function registerIpcHandlers(): void {
         // Update lock file
         const safeName = sanitizeName(skill.name)
         const existing = lock.skills[safeName]
+        const repoName =
+          parsed.type === "github" && parsed.owner && parsed.repo
+            ? `${sanitizeName(parsed.owner)}-${sanitizeName(parsed.repo)}`
+            : undefined
+        const repoDir = repoName ? path.join(STORE_REPOS_DIR, repoName) : undefined
+        const commit = repoDir ? await getGitCommit(repoDir) : undefined
         lock.skills[safeName] = {
           source:
             parsed.type === "github"
@@ -1814,6 +1963,9 @@ export function registerIpcHandlers(): void {
           sourceType: parsed.type,
           originalUrl: source,
           skillFolderHash: "",
+          repoPath: repoDir,
+          subPath: repoDir ? path.relative(repoDir, skillDir) : undefined,
+          gitCommit: commit,
           installedAt: existing?.installedAt || now,
           updatedAt: now,
         }
@@ -2091,72 +2243,208 @@ Add your skill instructions here.
     await writeSkillLock(lock)
   })
 
-  // Update a skill (re-install from source)
+  // Update a skill (from persistent git repo or local source)
   ipcMain.handle("skills:update", async (_event, name: string) => {
     const safeName = sanitizeName(name)
     const lock = await readSkillLock()
     const entry = lock.skills[safeName]
 
-    if (!entry?.originalUrl) {
-      throw new Error(`No source recorded for skill "${name}". Cannot update.`)
+    if (!entry?.originalUrl && !entry?.source) {
+      throw new Error(`未记录技能 "${name}" 的来源，无法更新。`)
     }
 
-    // Re-install from the original source
-    // This triggers the install handler logic internally
-    const detected = await detectAgents()
-    const agentNames = detected.map((a) => a.name)
-
-    const parsed = parseSource(entry.originalUrl)
+    const sourceStr = entry.originalUrl || entry.source
+    const parsed = parseSource(sourceStr)
     if (!parsed) {
-      throw new Error(`Cannot parse stored source: "${entry.originalUrl}"`)
+      throw new Error(`无法解析存储的来源: "${sourceStr}"`)
     }
-
-    let sourceDir: string
-    let tmpDir: string | null = null
 
     if (parsed.type === "github") {
-      tmpDir = path.join(os.tmpdir(), `skillsgate-upd-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`)
-      const cloneResult = await gitClone(`${parsed.url}.git`, tmpDir)
-      if (!cloneResult.success) {
-        throw new Error(`Clone failed: ${cloneResult.error}`)
+      const repoRes = await ensurePersistentRepo(parsed)
+      if (!repoRes.success) {
+        throw new Error(`克隆/拉取仓库失败: ${repoRes.error}`)
       }
-      sourceDir = tmpDir
-    } else {
-      sourceDir = parsed.url
-    }
+      const repoDir = repoRes.repoDir
 
-    const discovered = await discoverSkillsInDir(sourceDir)
-    // Find the specific skill we're updating
-    const target = discovered.find(
-      (s) => sanitizeName(s.name) === safeName,
+      // Check dirty
+      const dirty = await isGitDirty(repoDir)
+      if (dirty) {
+        throw new Error("本地仓库存在未提交修改（Dirty），已跳过更新以防止覆盖。")
+      }
+
+      const pullRes = await gitPull(repoDir)
+      if (!pullRes.success) {
+        throw new Error(`Git pull 失败: ${pullRes.error}`)
+      }
+
+      const discovered = await discoverSkillsInDir(repoDir)
+      const target = discovered.find(
+        (s) => sanitizeName(s.name) === safeName,
+      )
+      if (!target) {
+        throw new Error(`仓库中未找到技能 "${name}"。`)
+      }
+
+      const skillDir = path.dirname(target.filePath)
+      await takeoverStaticStoreSkill(name, skillDir)
+
+      const commit = await getGitCommit(repoDir)
+
+      lock.skills[safeName] = {
+        ...entry,
+        repoPath: repoDir,
+        subPath: path.relative(repoDir, skillDir),
+        gitCommit: commit,
+        updatedAt: new Date().toISOString(),
+      }
+      await writeSkillLock(lock)
+
+      // Sync core if this skill is in core
+      const coreTarget = path.join(CORE_SKILLS_DIR, safeName)
+      if (await pathExists(coreTarget)) {
+        await installDirToCore(skillDir, safeName, { mode: "link", replace: true })
+        await applyCoreSync(await planCoreSync(await getCoreAgents()))
+      }
+
+      await rescanAndCache().catch(() => undefined)
+      return {
+        ok: true,
+        commit,
+        alreadyUpToDate: pullRes.alreadyUpToDate,
+        message: pullRes.alreadyUpToDate ? "已经是最新版本" : `已更新至 ${commit}`,
+      }
+    } else {
+      // Local source: refresh timestamp
+      lock.skills[safeName] = {
+        ...entry,
+        updatedAt: new Date().toISOString(),
+      }
+      await writeSkillLock(lock)
+      await rescanAndCache().catch(() => undefined)
+      return { ok: true, message: "已刷新" }
+    }
+  })
+
+  // Update all Git skills across local persistent repositories
+  ipcMain.handle("skills:update-all-git", async () => {
+    const lock = await readSkillLock()
+    const gitEntries = Object.entries(lock.skills).filter(
+      ([, entry]) => entry.sourceType === "github" || entry.source?.includes("/"),
     )
 
-    if (!target) {
-      if (tmpDir) {
-        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-      }
-      throw new Error(`Skill "${name}" not found in source.`)
-    }
+    const repoMap = new Map<string, { owner: string; repo: string; originalUrl?: string }>()
 
-    const skillDir = path.dirname(target.filePath)
-
-    for (const agentName of agentNames) {
-      const agent = agentRegistry[agentName]
-      if (agent) {
-        await installSkillToAgent(skillDir, target.name, agent)
+    for (const [, entry] of gitEntries) {
+      if (entry.source && entry.source.includes("/")) {
+        const [owner, repo] = entry.source.split("/")
+        const repoName = `${sanitizeName(owner)}-${sanitizeName(repo)}`
+        const repoDir = path.join(STORE_REPOS_DIR, repoName)
+        if (!repoMap.has(repoDir)) {
+          repoMap.set(repoDir, { owner, repo, originalUrl: entry.originalUrl })
+        }
       }
     }
 
-    // Update lock entry timestamp
-    lock.skills[safeName] = {
-      ...entry,
-      updatedAt: new Date().toISOString(),
+    if (await dirExists(STORE_REPOS_DIR)) {
+      const dirs = await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true })
+      for (const d of dirs) {
+        if (d.isDirectory()) {
+          const repoDir = path.join(STORE_REPOS_DIR, d.name)
+          if ((await dirExists(path.join(repoDir, ".git"))) && !repoMap.has(repoDir)) {
+            const parts = d.name.split("-")
+            const owner = parts[0] || "unknown"
+            const repo = parts.slice(1).join("-") || "unknown"
+            repoMap.set(repoDir, { owner, repo })
+          }
+        }
+      }
     }
-    await writeSkillLock(lock)
 
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    const results: Array<{
+      repo: string
+      name: string
+      status: "updated" | "up-to-date" | "dirty" | "error"
+      commit?: string
+      error?: string
+    }> = []
+
+    let anyChanged = false
+
+    for (const [repoDir, meta] of repoMap.entries()) {
+      const repoDisplayName = `${meta.owner}/${meta.repo}`
+      const gitDir = path.join(repoDir, ".git")
+
+      if (!(await dirExists(gitDir))) {
+        const parsed = parseSource(meta.originalUrl || `${meta.owner}/${meta.repo}`)
+        if (parsed && parsed.type === "github") {
+          const cloneRes = await ensurePersistentRepo(parsed)
+          if (!cloneRes.success) {
+            results.push({
+              repo: repoDir,
+              name: repoDisplayName,
+              status: "error",
+              error: `克隆失败: ${cloneRes.error}`,
+            })
+            continue
+          }
+        }
+      }
+
+      const dirty = await isGitDirty(repoDir)
+      if (dirty) {
+        results.push({
+          repo: repoDir,
+          name: repoDisplayName,
+          status: "dirty",
+          error: "本地仓库存在未提交修改，已跳过更新以防止覆盖",
+        })
+        continue
+      }
+
+      const pullRes = await gitPull(repoDir)
+      if (!pullRes.success) {
+        results.push({
+          repo: repoDir,
+          name: repoDisplayName,
+          status: "error",
+          error: pullRes.error,
+        })
+      } else {
+        const commit = await getGitCommit(repoDir)
+        results.push({
+          repo: repoDir,
+          name: repoDisplayName,
+          status: pullRes.alreadyUpToDate ? "up-to-date" : "updated",
+          commit,
+        })
+        if (!pullRes.alreadyUpToDate) {
+          anyChanged = true
+        }
+
+        try {
+          const discovered = await discoverSkillsInDir(repoDir)
+          for (const s of discovered) {
+            const sName = sanitizeName(s.name)
+            if (lock.skills[sName]) {
+              await takeoverStaticStoreSkill(s.name, path.dirname(s.filePath))
+              lock.skills[sName].repoPath = repoDir
+              lock.skills[sName].gitCommit = commit
+              lock.skills[sName].updatedAt = new Date().toISOString()
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
     }
+
+    if (anyChanged) {
+      await writeSkillLock(lock)
+      await applyCoreSync(await planCoreSync(await getCoreAgents()))
+    }
+
+    await rescanAndCache().catch(() => undefined)
+    return results
   })
 
   // -------------------------------------------------------------------------
@@ -2418,16 +2706,24 @@ Add your skill instructions here.
         conflict?: boolean
         already?: boolean
       }[] = []
-      // A GitHub source is a temp clone that gets deleted on cleanup — linking
-      // at it would leave nothing but a dangling core entry, so force copy.
-      const installOpts: CoreInstallOptions =
-        resolved.value.parsed.type === "github"
-          ? { ...opts, mode: "copy" }
-          : opts
+      const installOpts: CoreInstallOptions = {
+        ...opts,
+        mode: opts.mode ?? "link",
+      }
+      const lock = await readSkillLock()
+      const now = new Date().toISOString()
+      const parsed = resolved.value.parsed
+
       try {
         for (const skill of resolved.value.skills) {
+          const skillDir = path.dirname(skill.filePath)
+
+          if (parsed.type === "github") {
+            await takeoverStaticStoreSkill(skill.name, skillDir)
+          }
+
           const res = await installDirToCore(
-            path.dirname(skill.filePath),
+            skillDir,
             skill.name,
             installOpts,
           )
@@ -2438,7 +2734,33 @@ Add your skill instructions here.
             conflict: res.conflict,
             already: res.already,
           })
+
+          if (res.ok) {
+            const safeName = sanitizeName(skill.name)
+            const existing = lock.skills[safeName]
+            const repoName =
+              parsed.type === "github" && parsed.owner && parsed.repo
+                ? `${sanitizeName(parsed.owner)}-${sanitizeName(parsed.repo)}`
+                : undefined
+            const repoDir = repoName ? path.join(STORE_REPOS_DIR, repoName) : undefined
+            const commit = repoDir ? await getGitCommit(repoDir) : undefined
+            lock.skills[safeName] = {
+              source:
+                parsed.type === "github"
+                  ? `${parsed.owner}/${parsed.repo}`
+                  : parsed.url,
+              sourceType: parsed.type,
+              originalUrl: source,
+              skillFolderHash: "",
+              repoPath: repoDir,
+              subPath: repoDir ? path.relative(repoDir, skillDir) : undefined,
+              gitCommit: commit,
+              installedAt: existing?.installedAt || now,
+              updatedAt: now,
+            }
+          }
         }
+        await writeSkillLock(lock)
       } finally {
         await resolved.value.cleanup()
       }
