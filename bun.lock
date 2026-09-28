@@ -26,7 +26,7 @@
     },
     "apps/desktop": {
       "name": "@skillsgate/desktop",
-      "version": "0.6.5",
+      "version": "0.6.6",
       "dependencies": {
         "@codemirror/commands": "^6.10.3",
         "@codemirror/lang-markdown": "^6.5.0",

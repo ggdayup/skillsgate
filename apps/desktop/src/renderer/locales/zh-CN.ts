@@ -29,6 +29,17 @@ export const zhCN: Record<string, string> = {
   Update: "更新",
   Theme: "主题",
   GitHub: "GitHub",
+  Sources: "技能源",
+  "Git Sources": "Git 仓库源",
+  "Local Paths": "本地扫描目录",
+  "Tracked GitHub Sources": "已跟踪的 GitHub 源",
+  "Add GitHub Source": "添加 GitHub 源",
+  "Update all Git sources": "更新所有 Git 源",
+  "No Git sources tracked yet.": "尚未跟踪任何 GitHub 技能源。",
+  "Dirty": "有未提交改动",
+  "Untrack & Delete": "取消跟踪并删除",
+  "Pull latest": "拉取最新",
+  "Install to Core": "安装到 Core",
 
   // Common actions
   Add: "添加",

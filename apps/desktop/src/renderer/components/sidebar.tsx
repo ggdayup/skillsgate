@@ -92,7 +92,7 @@ const navItems: NavItem[] = [
   },
   {
     to: "/scan-sources",
-    label: "Scan Sources",
+    label: "Sources",
     icon: (
       <svg
         width="18"

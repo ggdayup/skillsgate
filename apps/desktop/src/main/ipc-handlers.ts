@@ -66,6 +66,10 @@ import {
   isGitDirty,
   gitPull,
   realpathOrResolve,
+  getGitOriginUrl,
+  getGitBranch,
+  getGitLatestLog,
+  getRepoDisplayName,
 } from "./git-repo"
 
 // ---------------------------------------------------------------------------
@@ -2694,6 +2698,331 @@ Add your skill instructions here.
       if (!res.ok) throw new Error(res.error || "Replace failed")
       await rescanAndCache().catch(() => undefined)
       return res
+    },
+  )
+
+  // -------------------------------------------------------------------------
+  // Git sources (~/.agents/.store/repos)
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle("git-sources:list", async (): Promise<GitRepoSummary[]> => {
+    if (!(await dirExists(STORE_REPOS_DIR))) {
+      return []
+    }
+
+    const entries = await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true })
+    const repos: GitRepoSummary[] = []
+    const detected = await detectAgents()
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const repoDir = path.join(STORE_REPOS_DIR, entry.name)
+      const gitDir = path.join(repoDir, ".git")
+      if (!(await dirExists(gitDir))) continue
+
+      const originUrl = await getGitOriginUrl(repoDir)
+      const branch = await getGitBranch(repoDir)
+      const commitLog = await getGitLatestLog(repoDir)
+      const commit = commitLog?.hash || (await getGitCommit(repoDir))
+      const commitMessage = commitLog?.message || ""
+      const commitDate = commitLog?.date || ""
+      const dirty = await isGitDirty(repoDir)
+      const displayName = getRepoDisplayName(originUrl, entry.name)
+
+      // Discover skills inside this repo
+      const unreadable: string[] = []
+      const discovered = await discoverSkillsInDir(repoDir, 0, 5, unreadable)
+      const skills: GitRepoSkillSummary[] = []
+
+      for (const skill of discovered) {
+        const skillDir = path.dirname(skill.filePath)
+        const subPath = path.relative(repoDir, skillDir)
+        const skillReal = await realpathOrResolve(skillDir)
+
+        // Check Core (~/.agents/skills/{skillName})
+        const safeName = sanitizeName(skill.name)
+        const coreSkillPath = path.join(CORE_SKILLS_DIR, safeName)
+        let isCoreInstalled = false
+        if (await pathExists(coreSkillPath)) {
+          try {
+            const coreReal = await realpathOrResolve(coreSkillPath)
+            if (coreReal === skillReal) {
+              isCoreInstalled = true
+            }
+          } catch {}
+        }
+
+        // Check installed agents
+        const installedAgents: string[] = []
+        for (const agent of detected) {
+          const regAgent = agentRegistry[agent.name]
+          if (!regAgent) continue
+          const agentSkillPath = path.join(regAgent.globalSkillsDir, safeName)
+          if (await pathExists(agentSkillPath)) {
+            try {
+              const agentReal = await realpathOrResolve(agentSkillPath)
+              if (agentReal === skillReal) {
+                installedAgents.push(agent.displayName)
+              }
+            } catch {}
+          }
+        }
+
+        skills.push({
+          name: skill.name,
+          description: skill.description ?? "",
+          subPath,
+          isCoreInstalled,
+          installedAgents,
+        })
+      }
+
+      repos.push({
+        name: entry.name,
+        displayName,
+        path: repoDir,
+        originUrl,
+        branch,
+        commit,
+        commitMessage,
+        commitDate,
+        isDirty: dirty,
+        skills,
+      })
+    }
+
+    repos.sort((a, b) => a.displayName.localeCompare(b.displayName))
+    return repos
+  })
+
+  ipcMain.handle(
+    "git-sources:pull",
+    async (_e, repoName: string): Promise<GitRepoSyncResult> => {
+      const safeName = path.basename(repoName)
+      const repoDir = path.join(STORE_REPOS_DIR, safeName)
+      if (!(await dirExists(repoDir))) {
+        return { status: "error", error: `Repository not found: ${repoName}` }
+      }
+      return syncGitRepo(repoDir)
+    },
+  )
+
+  ipcMain.handle(
+    "git-sources:pull-all",
+    async (): Promise<Record<string, GitRepoSyncResult>> => {
+      if (!(await dirExists(STORE_REPOS_DIR))) return {}
+      const entries = await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true })
+      const results: Record<string, GitRepoSyncResult> = {}
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const repoDir = path.join(STORE_REPOS_DIR, entry.name)
+        const gitDir = path.join(repoDir, ".git")
+        if (await dirExists(gitDir)) {
+          results[entry.name] = await syncGitRepo(repoDir)
+        }
+      }
+      return results
+    },
+  )
+
+  ipcMain.handle(
+    "git-sources:add",
+    async (_e, url: string): Promise<{ ok: boolean; repo?: GitRepoSummary; error?: string }> => {
+      const parsed = parseSource(url.trim())
+      if (!parsed || parsed.type !== "github" || !parsed.owner || !parsed.repo) {
+        return { ok: false, error: "请输入有效的 GitHub 仓库链接，如 https://github.com/owner/repo" }
+      }
+
+      const repoRes = await ensurePersistentRepo(parsed)
+      if (!repoRes.success) {
+        return { ok: false, error: repoRes.error || "克隆仓库失败" }
+      }
+
+      // Read summary for the newly added repo
+      const repoDir = repoRes.repoDir
+      const repoName = path.basename(repoDir)
+      const originUrl = await getGitOriginUrl(repoDir)
+      const branch = await getGitBranch(repoDir)
+      const commitLog = await getGitLatestLog(repoDir)
+      const commit = commitLog?.hash || (await getGitCommit(repoDir))
+      const commitMessage = commitLog?.message || ""
+      const commitDate = commitLog?.date || ""
+      const dirty = await isGitDirty(repoDir)
+      const displayName = getRepoDisplayName(originUrl, repoName)
+
+      const unreadable: string[] = []
+      const discovered = await discoverSkillsInDir(repoDir, 0, 5, unreadable)
+      const detected = await detectAgents()
+      const skills: GitRepoSkillSummary[] = []
+
+      for (const skill of discovered) {
+        const skillDir = path.dirname(skill.filePath)
+        const subPath = path.relative(repoDir, skillDir)
+        const skillReal = await realpathOrResolve(skillDir)
+
+        const safeName = sanitizeName(skill.name)
+        const coreSkillPath = path.join(CORE_SKILLS_DIR, safeName)
+        let isCoreInstalled = false
+        if (await pathExists(coreSkillPath)) {
+          try {
+            const coreReal = await realpathOrResolve(coreSkillPath)
+            if (coreReal === skillReal) isCoreInstalled = true
+          } catch {}
+        }
+
+        const installedAgents: string[] = []
+        for (const agent of detected) {
+          const regAgent = agentRegistry[agent.name]
+          if (!regAgent) continue
+          const agentSkillPath = path.join(regAgent.globalSkillsDir, safeName)
+          if (await pathExists(agentSkillPath)) {
+            try {
+              const agentReal = await realpathOrResolve(agentSkillPath)
+              if (agentReal === skillReal) installedAgents.push(agent.displayName)
+            } catch {}
+          }
+        }
+
+        skills.push({
+          name: skill.name,
+          description: skill.description ?? "",
+          subPath,
+          isCoreInstalled,
+          installedAgents,
+        })
+      }
+
+      return {
+        ok: true,
+        repo: {
+          name: repoName,
+          displayName,
+          path: repoDir,
+          originUrl,
+          branch,
+          commit,
+          commitMessage,
+          commitDate,
+          isDirty: dirty,
+          skills,
+        },
+      }
+    },
+  )
+
+  ipcMain.handle(
+    "git-sources:remove",
+    async (
+      _e,
+      repoName: string,
+      action: "unlink" | "detach" | "keep-links" = "unlink",
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const safeName = path.basename(repoName)
+      const repoDir = path.join(STORE_REPOS_DIR, safeName)
+      if (path.dirname(repoDir) !== STORE_REPOS_DIR) {
+        return { ok: false, error: "Access denied" }
+      }
+      if (!(await dirExists(repoDir))) {
+        return { ok: false, error: `Repository not found: ${repoName}` }
+      }
+
+      const repoReal = await realpathOrResolve(repoDir)
+      const detected = await detectAgents()
+      const unreadable: string[] = []
+      const skills = await discoverSkillsInDir(repoDir, 0, 5, unreadable)
+
+      if (action === "unlink") {
+        for (const skill of skills) {
+          const sName = sanitizeName(skill.name)
+          const skillDir = path.dirname(skill.filePath)
+          const skillReal = await realpathOrResolve(skillDir)
+
+          // Core
+          const corePath = path.join(CORE_SKILLS_DIR, sName)
+          try {
+            if (await pathExists(corePath)) {
+              const lstat = await fs.lstat(corePath)
+              if (lstat.isSymbolicLink()) {
+                const real = await realpathOrResolve(corePath)
+                if (real === skillReal || real.startsWith(repoReal)) {
+                  await fs.unlink(corePath)
+                }
+              }
+            }
+          } catch {}
+
+          // Store
+          const storePath = path.join(CANONICAL_SKILLS_DIR, sName)
+          try {
+            if (await pathExists(storePath)) {
+              const lstat = await fs.lstat(storePath)
+              if (lstat.isSymbolicLink()) {
+                const real = await realpathOrResolve(storePath)
+                if (real === skillReal || real.startsWith(repoReal)) {
+                  await fs.unlink(storePath)
+                }
+              }
+            }
+          } catch {}
+
+          // Agents
+          for (const agent of detected) {
+            const regAgent = agentRegistry[agent.name]
+            if (!regAgent) continue
+            const agentSkillPath = path.join(regAgent.globalSkillsDir, sName)
+            try {
+              if (await pathExists(agentSkillPath)) {
+                const lstat = await fs.lstat(agentSkillPath)
+                if (lstat.isSymbolicLink()) {
+                  const real = await realpathOrResolve(agentSkillPath)
+                  if (real === skillReal || real.startsWith(repoReal)) {
+                    await fs.unlink(agentSkillPath)
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+      } else if (action === "detach") {
+        for (const skill of skills) {
+          const sName = sanitizeName(skill.name)
+          const skillDir = path.dirname(skill.filePath)
+          const storePath = path.join(CANONICAL_SKILLS_DIR, sName)
+
+          try {
+            if (await pathExists(storePath)) {
+              const lstat = await fs.lstat(storePath)
+              if (lstat.isSymbolicLink()) {
+                await fs.unlink(storePath)
+              } else {
+                await fs.rm(storePath, { recursive: true, force: true })
+              }
+            }
+            await fs.mkdir(CANONICAL_SKILLS_DIR, { recursive: true })
+            await fs.cp(skillDir, storePath, { recursive: true })
+
+            // Re-point Core if it was pointing to repo
+            const corePath = path.join(CORE_SKILLS_DIR, sName)
+            if (await pathExists(corePath)) {
+              const lstat = await fs.lstat(corePath)
+              if (lstat.isSymbolicLink()) {
+                const real = await realpathOrResolve(corePath)
+                if (real.startsWith(repoReal)) {
+                  await fs.unlink(corePath)
+                  const relTarget = path.relative(path.dirname(corePath), storePath)
+                  await fs.symlink(relTarget, corePath)
+                }
+              }
+            }
+          } catch (err) {
+            console.warn(`[git-sources] Failed to detach skill ${sName}:`, err)
+          }
+        }
+      }
+
+      await fs.rm(repoDir, { recursive: true, force: true })
+      await rescanAndCache().catch(() => undefined)
+      return { ok: true }
     },
   )
 }

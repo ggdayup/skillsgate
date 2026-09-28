@@ -146,6 +146,47 @@ export async function getGitCommit(repoDir: string): Promise<string> {
   return res.success ? res.stdout.trim() : ""
 }
 
+export interface GitCommitInfo {
+  hash: string
+  message: string
+  date: string
+  author: string
+}
+
+export async function getGitOriginUrl(repoDir: string): Promise<string> {
+  const res = await gitExec(["remote", "get-url", "origin"], repoDir)
+  return res.success ? res.stdout.trim() : ""
+}
+
+export async function getGitBranch(repoDir: string): Promise<string> {
+  const res = await gitExec(["rev-parse", "--abbrev-ref", "HEAD"], repoDir)
+  return res.success ? res.stdout.trim() : ""
+}
+
+export async function getGitLatestLog(repoDir: string): Promise<GitCommitInfo | null> {
+  const res = await gitExec(
+    ["log", "-1", "--format=%h%x1f%s%x1f%cd%x1f%an", "--date=short"],
+    repoDir,
+  )
+  if (!res.success || !res.stdout.trim()) return null
+  const [hash = "", message = "", date = "", author = ""] = res.stdout.trim().split("\x1f")
+  return { hash, message, date, author }
+}
+
+export function getRepoDisplayName(originUrl: string, repoName: string): string {
+  if (originUrl) {
+    const clean = originUrl.replace(/\.git$/, "").replace(/^.*github\.com[:/]/, "")
+    if (clean.includes("/")) return clean
+  }
+  if (repoName.includes("-")) {
+    const parts = repoName.split("-")
+    if (parts.length >= 2) {
+      return `${parts[0]}/${parts.slice(1).join("-")}`
+    }
+  }
+  return repoName
+}
+
 export async function ensurePersistentRepo(
   parsed: ParsedSource,
 ): Promise<{ success: boolean; repoDir: string; error?: string }> {

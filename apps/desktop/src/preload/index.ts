@@ -123,6 +123,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   serversPushApply: (serverId: string, preview: unknown) =>
     ipcRenderer.invoke("servers:push-apply", serverId, preview),
 
+  // Git Sources (~/.agents/.store/repos)
+  gitSourcesList: () => ipcRenderer.invoke("git-sources:list"),
+  gitSourcesAdd: (url: string) => ipcRenderer.invoke("git-sources:add", url),
+  gitSourcesPull: (repoName: string) => ipcRenderer.invoke("git-sources:pull", repoName),
+  gitSourcesPullAll: () => ipcRenderer.invoke("git-sources:pull-all"),
+  gitSourcesRemove: (repoName: string, action: string) =>
+    ipcRenderer.invoke("git-sources:remove", repoName, action),
+
   // Settings
   settingsGet: (key: string, defaultValue: unknown) =>
     ipcRenderer.invoke("settings:get", key, defaultValue),

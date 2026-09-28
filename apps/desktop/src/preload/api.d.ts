@@ -203,7 +203,46 @@ declare global {
     extraLines: string[]
   }
 
+  // ---- Git sources (~/.agents/.store/repos) ----
+
+  interface GitRepoSkillSummary {
+    name: string
+    description?: string
+    subPath: string
+    isCoreInstalled: boolean
+    installedAgents: string[]
+  }
+
+  interface GitRepoSummary {
+    name: string
+    displayName: string
+    path: string
+    originUrl: string
+    branch: string
+    commit: string
+    commitMessage: string
+    commitDate: string
+    isDirty: boolean
+    skills: GitRepoSkillSummary[]
+  }
+
+  interface GitRepoSyncResult {
+    status: "updated" | "up-to-date" | "dirty" | "error"
+    commit?: string
+    error?: string
+  }
+
   interface ElectronAPI {
+    // Git Sources
+    gitSourcesList: () => Promise<GitRepoSummary[]>
+    gitSourcesAdd: (url: string) => Promise<{ ok: boolean; repo?: GitRepoSummary; error?: string }>
+    gitSourcesPull: (repoName: string) => Promise<GitRepoSyncResult>
+    gitSourcesPullAll: () => Promise<Record<string, GitRepoSyncResult>>
+    gitSourcesRemove: (
+      repoName: string,
+      action: "unlink" | "detach" | "keep-links",
+    ) => Promise<{ ok: boolean; error?: string }>
+
     detectAgents: () => Promise<DetectedAgent[]>
     listInstalled: () => Promise<InstalledSkill[]>
     rescanSkills: () => Promise<InstalledSkill[]>
