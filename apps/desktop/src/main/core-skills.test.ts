@@ -320,4 +320,20 @@ describe("installDirToCore", () => {
   });
 });
 
+describe("findDanglingCoreEntries", () => {
+  it("finds broken symlinks in core directory", async () => {
+    const externalDir = path.join(home, "temporary-source");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Temp\n");
+
+    await installDirToCore(externalDir, "dangling-candidate", { mode: "link" });
+    await fs.rm(externalDir, { recursive: true, force: true });
+
+    const dangling = await findDanglingCoreEntries();
+    const match = dangling.find((d) => d.name === "dangling-candidate");
+    assert.ok(match);
+  });
+});
+
+
 
