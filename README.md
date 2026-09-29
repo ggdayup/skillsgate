@@ -13,7 +13,7 @@
 <p align="center">
   <img src="https://img.shields.io/npm/v/skillsgate?color=a8a29e&label=npm" alt="npm version" />
   <img src="https://img.shields.io/badge/powered_by-skills.sh-a8a29e" alt="powered by skills.sh" />
-  <img src="https://img.shields.io/badge/agents-28-a8a29e" alt="28 agents" />
+  <img src="https://img.shields.io/badge/agents-33-a8a29e" alt="33 agents" />
   <img src="https://img.shields.io/badge/license-MIT-a8a29e" alt="MIT license" />
 </p>
 
@@ -25,7 +25,7 @@
 
 ## What is SkillsGate?
 
-SkillsGate lets you browse, install, and manage AI agent skills from a single interface. It works with 28+ agents and integrates [skills.sh](https://skills.sh) for public skill discovery.
+SkillsGate lets you browse, install, and manage AI agent skills from a single interface. It works with 33 agents and integrates [skills.sh](https://skills.sh) for public skill discovery.
 
 Instead of hunting through GitHub repos and copying markdown files by hand, you open SkillsGate, search for what you need, and install it to any combination of agents with one click.
 
