@@ -1,6 +1,6 @@
 // Database
 export { openLocalDb, DB_PATH } from "./db.js"
-export { runMigrations } from "./migrations.js"
+export { runMigrations, getCurrentVersion, MIGRATIONS } from "./migrations.js"
 
 // Stores
 export { SettingsStore } from "./models/settings.js"
