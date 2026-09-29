@@ -34,6 +34,8 @@ const {
   findDanglingCoreEntries,
 } = await import("./core-skills.js");
 const { addPathToCore } = await import("../commands/core.js");
+const { agents } = await import("./agents.js");
+const { CORE_SKILLS_DIR } = await import("../constants.js");
 
 async function mkCoreEntry(name: string): Promise<string> {
   const dir = path.join(coreDir, name);
@@ -254,6 +256,72 @@ describe("fan-out links", () => {
     const second = await applyCoreSync(await planCoreSync({ agentNames: ["zed"] }));
     assert.equal(second.linked, 0);
     assert.equal(second.alreadyPresent, 1);
+  });
+
+  it("guards against false conflicts when agent globalSkillsDir is a symlink to core", async () => {
+    // Regression: agents like Antigravity, CodeBuddy, Pi symlink their entire
+    // skills directory at ~/.agents/skills. Without the guard, every core entry
+    // would be misreported as a same-name conflict instead of being skipped.
+    await mkCoreEntry("whole-symlink-skill");
+
+    const agent = agents["codebuddy"];
+    const agentDir = path.dirname(agent.globalSkillsDir);
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.symlink(CORE_SKILLS_DIR(), agent.globalSkillsDir);
+
+    try {
+      const plan = await planCoreSync({ agentNames: ["codebuddy"] });
+
+      assert.ok(plan.items.length > 0);
+      assert.equal(plan.items.length, plan.coreCount);
+      assert.ok(
+        plan.items.every(
+          (item) =>
+            item.action === "skip-present" &&
+            item.reason === "工具目录即 core 目录" &&
+            item.agent === "codebuddy",
+        ),
+      );
+      assert.equal(
+        plan.items.some((item) => item.action === "link"),
+        false,
+      );
+
+      // Idempotence: a second planCoreSync over the same state reports zero link items
+      const secondPlan = await planCoreSync({ agentNames: ["codebuddy"] });
+      assert.equal(
+        secondPlan.items.filter((item) => item.action === "link").length,
+        0,
+      );
+      assert.equal(secondPlan.items.length, plan.items.length);
+      assert.ok(
+        secondPlan.items.every(
+          (item) =>
+            item.action === "skip-present" &&
+            item.reason === "工具目录即 core 目录",
+        ),
+      );
+
+      // Verify full plan without explicit agentNames (via detectInstalledAgents)
+      const fullPlan = await planCoreSync();
+      const codebuddyItems = fullPlan.items.filter(
+        (item) => item.agent === "codebuddy",
+      );
+      assert.ok(codebuddyItems.length > 0);
+      assert.ok(
+        codebuddyItems.every(
+          (item) =>
+            item.action === "skip-present" &&
+            item.reason === "工具目录即 core 目录",
+        ),
+      );
+      assert.equal(
+        codebuddyItems.some((item) => item.action === "link"),
+        false,
+      );
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 });
 
