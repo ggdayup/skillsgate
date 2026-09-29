@@ -71,23 +71,23 @@ export async function realpathOrResolve(dir: string): Promise<string> {
 
 Applied in six places:
 
-1. **Canonical-agent detection** (`installer.ts:72`) — if the agent dir and
+1. **Canonical-agent detection** (`installer.ts:74`) — if the agent dir and
    `~/.agents/.store` resolve identically, write the skill to the store *once*
    and skip link creation entirely. This is the Symlink Canonical Store Defense.
 2. **Relative link math** for `.store` entries uses both ends' real paths
    (`installer.ts:211`).
 3. **False-conflict guard** — agent dir resolving to the core dir short-circuits
-   the whole plan for that tool (`core-skills.ts:284`).
+   the whole plan for that tool (`core-skills.ts:291`).
 4. **Entry identity** during planning — `realpath(target) === coreRealPath`
    means *linked* (`core-skills.ts:193`).
-5. **Physical containing directory** for link creation (`core-skills.ts:412`).
+5. **Physical containing directory** for link creation (`core-skills.ts:374`).
 6. **Idempotence checks** in `installDirToCore`.
 
 And every link is **written then re-resolved and compared**; on mismatch the
 link is removed and the next form is tried:
 
 ```ts
-// packages/cli/src/core/core-skills.ts:362 — writeCoreLink
+// packages/cli/src/core/core-skills.ts:374 — writeCoreLink
 for (const linkValue of [path.relative(physicalDir, srcReal), srcReal]) {
   await fs.symlink(linkValue, target, type);
   const resolved = await fs.realpath(target).catch(() => null);
@@ -128,7 +128,7 @@ Fallback chain: **relative → absolute → copy** (`junction` on win32).
 ## Implementation Notes
 
 - `packages/cli/src/core/installer.ts:34`
-- `packages/cli/src/core/core-skills.ts:284`, `:362`
+- `packages/cli/src/core/core-skills.ts:291`, `:374`
 - Regression test: `packages/cli/src/core/core-skills.test.ts:170-195`
 
 ## Related Decisions

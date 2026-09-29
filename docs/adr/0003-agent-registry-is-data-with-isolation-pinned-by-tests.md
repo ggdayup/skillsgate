@@ -74,7 +74,7 @@ export interface AgentConfig {
 
 - Detection uses two primitives: `dirExists()` and `commandExists()`, where the
   shell binary is chosen by platform — `win32 ? "where" : "which"`
-  (`agents.ts:32`). Never a bare `which`.
+  (`packages/cli/src/core/agents.ts:32`). Never a bare `which`.
 - Env overrides are explicit (`XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`,
   `CODEX_HOME`, `FACTORY_HOME`, `OB1_HOME`).
 - `detectInstalledAgents()` runs them concurrently and filters.
@@ -104,7 +104,7 @@ Isolation is then *pinned* by `packages/cli/src/core/agents.test.ts`:
 ### Negative
 
 - **The registry exists twice**: `packages/cli/src/core/agents.ts` and a mirror
-  inline in `apps/desktop/src/main/ipc-handlers.ts:77` (the desktop copy adds a
+  inline in `apps/desktop/src/main/ipc-handlers.ts:78` (the desktop copy adds a
   `shortCode` for badges and drops `skillsDir`). Only the CLI copy is covered by
   `agents.test.ts` — the desktop mirror's 33 entries are not asserted. See
   [ADR-0004](0004-share-logic-mirror-stable-config.md).
@@ -124,7 +124,7 @@ Isolation is then *pinned* by `packages/cli/src/core/agents.test.ts`:
 
 - `packages/cli/src/core/agents.ts` (33 entries)
 - `packages/cli/src/types.ts:3` — closed `AgentType` union
-- `apps/desktop/src/main/ipc-handlers.ts:77-141` — desktop mirror
+- `apps/desktop/src/main/ipc-handlers.ts:78-141` — desktop mirror
 - `packages/cli/src/core/agents.test.ts` — isolation pins
 
 ## Related Decisions

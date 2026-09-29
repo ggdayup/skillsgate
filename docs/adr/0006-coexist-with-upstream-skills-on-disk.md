@@ -4,7 +4,7 @@
 
 Accepted · 2026-09-19
 
-Backfilled 2026-09-29. Lock-file defence at `skill-lock.ts:43`; bin-name rule
+Backfilled 2026-09-29. Lock-file defence at `packages/cli/src/core/skill-lock.ts:43`; bin-name rule
 recorded in `docs/install-command-paste.md` §4.
 
 ## Context
@@ -130,7 +130,7 @@ claimed that bin name to make `npx skills` resolve to itself.
 
 - `packages/cli/src/constants.ts:29, 48, 59` — the three contested constants
 - `packages/cli/src/core/skill-lock.ts:17`, `:43`
-- `packages/skill-sources/src/parse-install-command.ts:114` — aliases
+- `packages/skill-sources/src/parse-install-command.ts:120` — aliases
 - `docs/install-command-paste.md` §4 and §10
 
 ## Related Decisions

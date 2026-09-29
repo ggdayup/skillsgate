@@ -69,7 +69,7 @@ Shared (`packages/skill-sources`, `"type": "module"`, source-only):
 - `parseSource`, `parseInstallCommand`, `formatInstallCommand`,
   `parseFrontmatterFallback`, `UPSTREAM_AGENT_ALIASES`, all types.
 - Consumed by `packages/cli` (via a thin re-export shim,
-  `core/source-parser.ts:19` lines from 178), by desktop main
+  `packages/cli/src/core/source-parser.ts` shrinks to 19 lines, from 178), by desktop main
   (`ipc-handlers.ts:15`), and by desktop renderer **only** through the
   `@skillsgate/skill-sources/format` subpath — `format-install-command.ts`
   imports zero `node:` modules, whereas the barrel pulls in `node:path` and
@@ -80,7 +80,7 @@ Mirrored into `apps/desktop/src/main`:
 - `skill-paths.ts` ← `packages/cli/src/constants.ts`
 - `core-skills.ts` ← `packages/cli/src/core/core-skills.ts` (agent list injected
   as an argument, to avoid a cycle on `ipc-handlers.ts`)
-- agent registry inline at `ipc-handlers.ts:77`
+- agent registry inline at `ipc-handlers.ts:78`
 - `skill-lock` constants, `skills-sh-client`
 
 ### Bundling rules that make Option 1 work

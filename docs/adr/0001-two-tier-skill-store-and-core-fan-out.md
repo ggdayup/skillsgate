@@ -79,11 +79,11 @@ Four invariants:
    or `dangling`. Already-linked is `skip-present`.
 2. **Never implicit overwrite.** A real directory of the same name is reported
    as `skip-conflict`. Replacing it is a separate, explicit action
-   (`replaceConflictWithCoreLink`, `core-skills.ts:940`) that moves it to
+   (`replaceConflictWithCoreLink`, `core-skills.ts:944`) that moves it to
    `.backup/` first and rolls back if linking fails.
 3. **Only remove our own links.** An unlink is performed only when the target
    resolves *inside* the core dir (`unlinkCoreLinkFromAgent`,
-   `core-skills.ts:754`). A real directory is never deleted; in `detach` mode it
+   `core-skills.ts:755`). A real directory is never deleted; in `detach` mode it
    is reported as a residual copy instead.
 4. **`core.json` is opt-outs only** because `readSkillLock()` returns an empty
    lock on a version mismatch — storing exclusions in `.skill-lock.json` would
@@ -113,7 +113,7 @@ Four invariants:
 
 - **A tool symlinking its entire skills directory at the core dir would report
   all 152 entries as conflicts.** Mitigated by the false-conflict guard at
-  `core-skills.ts:284`, which short-circuits when
+  `core-skills.ts:291`, which short-circuits when
   `realpathOrResolve(agentDir) === realpathOrResolve(CORE_SKILLS_DIR)`.
   ⚠️ This guard has no dedicated unit test — it rests on documentation and one
   observed run. Worth a regression test.

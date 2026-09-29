@@ -89,7 +89,7 @@ imports `src/mcp/` and `src/ui/` — but **nothing reachable from the bin import
 ```
 
 So `cli.ts`, `commands/`, `mcp/`, `ui/` form a dead cluster. They are retained
-rather than deleted because `core/core-skills.test.ts:32` still imports
+rather than deleted because `packages/cli/src/core/core-skills.test.ts:32` still imports
 `../commands/core.js`, and because they are a record of the old surface.
 
 **Do not add features there.** The paste-install entry point, for example, is
