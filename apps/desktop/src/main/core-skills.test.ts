@@ -209,3 +209,115 @@ describe("fan-out links", () => {
   });
 });
 
+describe("installDirToCore", () => {
+  it("symlinks an external directory into core in link mode", async () => {
+    const externalDir = path.join(home, "external-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# External Skill\n");
+
+    const res = await installDirToCore(externalDir, "external-skill", {
+      mode: "link",
+    });
+
+    assert.equal(res.ok, true);
+    const target = path.join(coreDir, "external-skill");
+    const lst = await fs.lstat(target);
+    assert.equal(lst.isSymbolicLink(), true);
+    const content = await fs.readFile(path.join(target, "SKILL.md"), "utf-8");
+    assert.equal(content, "# External Skill\n");
+
+    const second = await installDirToCore(externalDir, "external-skill", {
+      mode: "link",
+    });
+    assert.equal(second.ok, true);
+    assert.equal(second.already, true);
+  });
+
+  it("copies an external directory into core in copy mode", async () => {
+    const externalDir = path.join(home, "copy-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Copy Skill\n");
+
+    const res = await installDirToCore(externalDir, "copy-skill", {
+      mode: "copy",
+    });
+
+    assert.equal(res.ok, true);
+    const target = path.join(coreDir, "copy-skill");
+    const lst = await fs.lstat(target);
+    assert.equal(lst.isDirectory(), true);
+    assert.equal(lst.isSymbolicLink(), false);
+  });
+
+  it("defaults to copy mode when mode is omitted (pinned divergence from CLI, which defaults to link)", async () => {
+    // Deliberate divergence from CLI installDirToCore in packages/cli/src/core/core-skills.ts.
+    // The CLI implementation defaults to mode "link", creating a symlink in the core directory.
+    // The desktop mirror defaults to mode "copy", creating a real directory.
+    // This is because the core directory is git-tracked and the desktop path requires real files.
+    const externalDir = path.join(home, "default-mode-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Default Mode Skill\n");
+
+    const res = await installDirToCore(externalDir, "default-mode-skill");
+
+    assert.equal(res.ok, true);
+    const target = path.join(coreDir, "default-mode-skill");
+    const lst = await fs.lstat(target);
+    assert.equal(lst.isDirectory(), true);
+    assert.equal(lst.isSymbolicLink(), false);
+  });
+
+  it("refuses to clobber existing entry when replace is false", async () => {
+    const dirA = path.join(home, "conflict-source-a");
+    const dirB = path.join(home, "conflict-source-b");
+    await fs.mkdir(dirA, { recursive: true });
+    await fs.mkdir(dirB, { recursive: true });
+    await fs.writeFile(path.join(dirA, "SKILL.md"), "# Skill A\n");
+    await fs.writeFile(path.join(dirB, "SKILL.md"), "# Skill B\n");
+
+    const first = await installDirToCore(dirA, "conflict-skill");
+    assert.equal(first.ok, true);
+
+    const second = await installDirToCore(dirB, "conflict-skill", {
+      replace: false,
+    });
+    assert.equal(second.ok, false);
+    assert.equal(second.conflict, true);
+  });
+
+  it("replaces existing entry and saves backup when replace is true", async () => {
+    const dirA = path.join(home, "replace-source-a");
+    const dirB = path.join(home, "replace-source-b");
+    await fs.mkdir(dirA, { recursive: true });
+    await fs.mkdir(dirB, { recursive: true });
+    await fs.writeFile(path.join(dirA, "SKILL.md"), "# Skill A\n");
+    await fs.writeFile(path.join(dirB, "SKILL.md"), "# Skill B\n");
+
+    await installDirToCore(dirA, "replace-skill");
+
+    const res = await installDirToCore(dirB, "replace-skill", { replace: true });
+    assert.equal(res.ok, true);
+
+    const target = path.join(coreDir, "replace-skill");
+    const content = await fs.readFile(path.join(target, "SKILL.md"), "utf-8");
+    assert.equal(content, "# Skill B\n");
+
+    const backupDir = BACKUP_DIR;
+    const backups = await fs.readdir(backupDir);
+    const found = backups.some((name) => name.startsWith("core--replace-skill--"));
+    assert.equal(found, true);
+  });
+
+  it("neutralises path traversal in skill name", async () => {
+    const externalDir = path.join(home, "traversal-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Traversal\n");
+
+    const res = await installDirToCore(externalDir, "../outside");
+    assert.equal(res.ok, true);
+    assert.equal(res.path.startsWith(coreDir), true);
+    assert.equal(path.basename(res.path), "..-outside");
+  });
+});
+
+
