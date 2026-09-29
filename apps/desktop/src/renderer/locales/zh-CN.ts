@@ -290,4 +290,11 @@ export const zhCN: Record<string, string> = {
     "跟踪上游 GitHub 仓库以浏览技能，按需接收更新，并将其链接到 Core 或本地工具。",
   "Updating...": "更新中…",
   installed: "已安装",
+  skills: "个技能",
+  "Select a source to view skills": "选择一个源以查看其技能",
+  "Filter skills in this source...": "过滤此源中的技能…",
+  "Clear filter": "清除过滤",
+  "No skills found in this source.": "该源中暂未发现有效技能。",
+  "No skills match your filter.": "没有匹配过滤条件的技能。",
+  "Not installed": "未安装",
 }

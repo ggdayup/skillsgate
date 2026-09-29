@@ -1,5 +1,5 @@
 import { t } from "../lib/i18n"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { electronAPI } from "../lib/electron-api"
 
 export function ScanSources() {
@@ -14,13 +14,22 @@ export function ScanSources() {
   const [gitRepos, setGitRepos] = useState<GitRepoSummary[]>([])
   const [loadingGit, setLoadingGit] = useState(true)
   const [gitError, setGitError] = useState<string | null>(null)
-  const [expandedRepos, setExpandedRepos] = useState<Record<string, boolean>>({})
+  const [selectedRepoName, setSelectedRepoName] = useState<string | null>(null)
+  const [skillSearch, setSkillSearch] = useState("")
   const [pullingRepo, setPullingRepo] = useState<Record<string, boolean>>({})
   const [pullResults, setPullResults] = useState<
     Record<string, { status: "updated" | "up-to-date" | "dirty" | "error"; commit?: string; error?: string }>
   >({})
   const [pullingAll, setPullingAll] = useState(false)
   const [installingSkill, setInstallingSkill] = useState<string | null>(null)
+  const [removingSkill, setRemovingSkill] = useState<string | null>(null)
+  const [batchRemovingCore, setBatchRemovingCore] = useState(false)
+  const [selectedSkillNames, setSelectedSkillNames] = useState<Set<string>>(new Set())
+  const [batchConfirmModal, setBatchConfirmModal] = useState<{
+    repo: GitRepoSummary
+    skillNames: string[]
+    action: "install" | "remove"
+  } | null>(null)
 
   // --- Add Source Modal state ---
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
@@ -58,12 +67,10 @@ export function ScanSources() {
     try {
       const list = await electronAPI.gitSourcesList()
       setGitRepos(list)
-      // Auto-expand all repositories initially
-      const expanded: Record<string, boolean> = {}
-      for (const r of list) {
-        expanded[r.name] = true
-      }
-      setExpandedRepos(expanded)
+      setSelectedRepoName((prev) => {
+        if (prev && list.some((r) => r.name === prev)) return prev
+        return list[0]?.name ?? null
+      })
     } catch (err: unknown) {
       setGitError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -166,15 +173,68 @@ export function ScanSources() {
     }
   }
 
-  function toggleRepoExpanded(name: string) {
-    setExpandedRepos((prev) => ({ ...prev, [name]: !prev[name] }))
+  async function handleRemoveSkillFromCore(skillName: string) {
+    setRemovingSkill(skillName)
+    try {
+      await electronAPI.coreRemove(skillName, "detach")
+      await loadGitRepos()
+    } catch (err: unknown) {
+      alert(`从 Core 移除失败: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setRemovingSkill(null)
+    }
   }
+
+  async function handleBatchRemoveFromCore(skillNames: string[]) {
+    if (skillNames.length === 0) return
+    setBatchRemovingCore(true)
+    try {
+      await electronAPI.coreBatchRemove(skillNames, "detach")
+      setSelectedSkillNames(new Set())
+      await loadGitRepos()
+    } catch (err: unknown) {
+      alert(`批量从 Core 移除失败: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBatchRemovingCore(false)
+      setBatchConfirmModal(null)
+    }
+  }
+
+  async function handleBatchInstallToCore(repo: GitRepoSummary, skillNames: string[]) {
+    if (skillNames.length === 0) return
+    setBatchRemovingCore(true)
+    try {
+      await electronAPI.coreInstall(repo.originUrl, skillNames)
+      setSelectedSkillNames(new Set())
+      await loadGitRepos()
+    } catch (err: unknown) {
+      alert(`批量安装到 Core 失败: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBatchRemovingCore(false)
+      setBatchConfirmModal(null)
+    }
+  }
+
+  const selectedRepo =
+    gitRepos.find((r) => r.name === selectedRepoName) ?? gitRepos[0] ?? null
+
+  const filteredSkills = useMemo(() => {
+    if (!selectedRepo) return []
+    const q = skillSearch.trim().toLowerCase()
+    if (!q) return selectedRepo.skills
+    return selectedRepo.skills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.description && s.description.toLowerCase().includes(q)) ||
+        s.subPath.toLowerCase().includes(q),
+    )
+  }, [selectedRepo, skillSearch])
 
   const totalDiscoveredSkills = gitRepos.reduce((acc, r) => acc + r.skills.length, 0)
 
   return (
     <div className="flex-1 overflow-y-auto px-8 py-6">
-      <div className="max-w-5xl">
+      <div className={activeTab === "git" ? "w-full max-w-[1440px]" : "max-w-5xl"}>
         {/* Header with Title and Tabs */}
         <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
@@ -360,275 +420,508 @@ export function ScanSources() {
               </div>
             )}
 
-            {/* Repositories Accordion List */}
-            <div className="flex flex-col gap-4">
-              {gitRepos.map((repo) => {
-                const isExpanded = expandedRepos[repo.name] ?? true
-                const isPulling = pullingRepo[repo.name] ?? false
-                const pullRes = pullResults[repo.name]
+            {/* Master-Detail Layout: Sources on Left, Skills on Right */}
+            <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] gap-6 items-start">
+              {/* Left Column: Sources List */}
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[12px] font-semibold text-muted uppercase tracking-wider">
+                    {t("Tracked GitHub Sources")}
+                  </span>
+                  <span className="text-[11px] text-muted font-mono">
+                    {gitRepos.length}
+                  </span>
+                </div>
 
-                return (
-                  <div
-                    key={repo.name}
-                    className="rounded-2xl border border-border bg-surface overflow-hidden transition-all shadow-sm"
-                  >
-                    {/* Repo Card Header */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 bg-surface hover:bg-surface/80 transition-colors">
+                <div className="flex flex-col gap-2.5">
+                  {gitRepos.map((repo) => {
+                    const isSelected = selectedRepo?.name === repo.name
+                    const isPulling = pullingRepo[repo.name] ?? false
+                    const pullRes = pullResults[repo.name]
+
+                    return (
                       <div
-                        onClick={() => toggleRepoExpanded(repo.name)}
-                        className="flex items-center gap-3 cursor-pointer select-none flex-1 min-w-[240px]"
+                        key={repo.name}
+                        onClick={() => {
+                          setSelectedRepoName(repo.name)
+                          setSkillSearch("")
+                        }}
+                        className={`group relative flex flex-col rounded-2xl border p-4 transition-all cursor-pointer text-left ${
+                          isSelected
+                            ? "border-foreground/40 bg-surface shadow-md ring-1 ring-foreground/20"
+                            : "border-border bg-surface/50 hover:bg-surface hover:border-border/80"
+                        }`}
                       >
-                        <span className="text-muted text-[12px]">
-                          {isExpanded ? "▼" : "▶"}
-                        </span>
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-foreground/80">
-                          <svg
-                            width="16"
-                            height="16"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
-                            <path d="M9 18c-4.51 2-5-2-7-2" />
-                          </svg>
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[14px] font-bold text-foreground">
+                        {/* Selected Indicator Bar */}
+                        {isSelected && (
+                          <div className="absolute left-0 top-3.5 bottom-3.5 w-1 rounded-r-full bg-foreground" />
+                        )}
+
+                        {/* Top: Icon + Name + Skill Count Badge */}
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground/80">
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+                                <path d="M9 18c-4.51 2-5-2-7-2" />
+                              </svg>
+                            </div>
+                            <span className="text-[13px] font-bold text-foreground truncate">
                               {repo.displayName}
                             </span>
-                            {repo.isDirty && (
+                          </div>
+
+                          <span className="shrink-0 rounded-full bg-border/60 px-2 py-0.5 text-[11px] font-medium text-foreground/80">
+                            {repo.skills.length} {t("skills")}
+                          </span>
+                        </div>
+
+                        {/* Middle: Branch, Commit, Date, Dirty */}
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted font-mono mb-3">
+                          <span>{repo.branch || "main"}</span>
+                          <span>·</span>
+                          <span title={repo.commitMessage}>
+                            {repo.commit ? repo.commit.slice(0, 7) : "HEAD"}
+                          </span>
+                          {repo.commitDate && (
+                            <>
+                              <span>·</span>
+                              <span>{repo.commitDate}</span>
+                            </>
+                          )}
+                          {repo.isDirty && (
+                            <span
+                              className="rounded-full bg-amber-500/20 border border-amber-500/40 px-1.5 py-0.2 text-[10px] font-semibold text-amber-400 ml-1"
+                              title="本地仓库包含未提交修改，更新已跳过以防止冲突"
+                            >
+                              {t("Dirty")}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Bottom: Pull Status + Action Buttons */}
+                        <div className="flex items-center justify-between gap-2 pt-2.5 border-t border-border/40">
+                          {/* Pull Feedback */}
+                          <div className="min-w-0 flex-1">
+                            {pullRes ? (
                               <span
-                                className="rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-semibold text-amber-400"
-                                title="本地仓库包含未提交修改，更新已跳过以防止冲突"
+                                className={`text-[10px] font-medium px-1.5 py-0.5 rounded truncate inline-block max-w-full ${
+                                  pullRes.status === "updated"
+                                    ? "bg-emerald-500/20 text-emerald-400"
+                                    : pullRes.status === "up-to-date"
+                                    ? "text-muted"
+                                    : pullRes.status === "dirty"
+                                    ? "bg-amber-500/20 text-amber-400"
+                                    : "bg-red-500/20 text-red-400"
+                                }`}
                               >
+                                {pullRes.status === "updated"
+                                  ? `${t("Updated to")} ${pullRes.commit?.slice(0, 7)}`
+                                  : pullRes.status === "up-to-date"
+                                  ? t("Already up to date")
+                                  : pullRes.status === "dirty"
+                                  ? t("Skipped (dirty)")
+                                  : t("Failed")}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-muted/60 truncate block">
+                                {repo.skills.filter((s) => s.isCoreInstalled || s.installedAgents.length > 0).length}{" "}
+                                {t("installed")}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void handlePullSingle(repo)
+                              }}
+                              disabled={repo.isDirty || isPulling}
+                              className="rounded-lg border border-border bg-background p-1.5 text-muted hover:text-foreground hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={
+                                repo.isDirty
+                                  ? "本地有未提交修改，已禁止拉取"
+                                  : t("Pull latest")
+                              }
+                            >
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                className={isPulling ? "animate-spin" : ""}
+                              >
+                                <path d="M12 3v12" />
+                                <path d="m8 11 4 4 4-4" />
+                                <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4" />
+                              </svg>
+                            </button>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void electronAPI.openInFinder(repo.path)
+                              }}
+                              className="rounded-lg border border-border bg-background p-1.5 text-muted hover:text-foreground hover:bg-surface"
+                              title="在访达中显示仓库文件夹"
+                            >
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                              </svg>
+                            </button>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setRemoveTargetRepo(repo)
+                                setRemoveAction("unlink")
+                                setRemoveError(null)
+                              }}
+                              className="rounded-lg border border-border bg-background p-1.5 text-muted hover:text-red-400 hover:bg-surface"
+                              title="取消跟踪并删除本地仓库"
+                            >
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <path d="M3 6h18" />
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Right Column: Selected Source's Skills */}
+              <div className="flex flex-col gap-4 min-w-0">
+                {!selectedRepo ? (
+                  <div className="rounded-2xl border border-dashed border-border bg-surface/50 p-12 text-center text-[12px] text-muted">
+                    {t("Select a source to view skills")}
+                  </div>
+                ) : (
+                  <>
+                    {/* Selected Source Header & Stats */}
+                    <div className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base font-bold text-foreground font-mono truncate">
+                              {selectedRepo.displayName}
+                            </h3>
+                            {selectedRepo.isDirty && (
+                              <span className="shrink-0 rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
                                 {t("Dirty")}
                               </span>
                             )}
                           </div>
-                          <div className="flex items-center gap-2 text-[11px] text-muted font-mono mt-0.5">
-                            <span>{repo.branch || "main"}</span>
+                          <div className="flex items-center gap-2 text-[11px] text-muted font-mono mt-1">
+                            <span>{selectedRepo.branch || "main"}</span>
                             <span>·</span>
-                            <span title={repo.commitMessage}>
-                              {repo.commit ? repo.commit.slice(0, 7) : "HEAD"}
+                            <span title={selectedRepo.commitMessage}>
+                              {selectedRepo.commit ? selectedRepo.commit.slice(0, 7) : "HEAD"}
                             </span>
-                            {repo.commitDate && (
+                            {selectedRepo.commitDate && (
                               <>
                                 <span>·</span>
-                                <span>{repo.commitDate}</span>
+                                <span>{selectedRepo.commitDate}</span>
                               </>
                             )}
                           </div>
                         </div>
-                      </div>
 
-                      {/* Header Actions */}
-                      <div className="flex items-center gap-2">
-                        {/* Pull Status / Feedback */}
-                        {pullRes && (
-                          <span
-                            className={`text-[11px] font-medium px-2 py-0.5 rounded ${
-                              pullRes.status === "updated"
-                                ? "bg-emerald-500/20 text-emerald-400"
-                                : pullRes.status === "up-to-date"
-                                ? "text-muted"
-                                : pullRes.status === "dirty"
-                                ? "bg-amber-500/20 text-amber-400"
-                                : "bg-red-500/20 text-red-400"
-                            }`}
-                          >
-                            {pullRes.status === "updated"
-                              ? `${t("Updated to")} ${pullRes.commit?.slice(0, 7)}`
-                              : pullRes.status === "up-to-date"
-                              ? t("Already up to date")
-                              : pullRes.status === "dirty"
-                              ? t("Skipped (dirty)")
-                              : t("Failed")}
-                          </span>
-                        )}
-
-                        {/* Pull Button */}
-                        <button
-                          onClick={() => void handlePullSingle(repo)}
-                          disabled={repo.isDirty || isPulling}
-                          className="rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
-                          title={
-                            repo.isDirty
-                              ? "本地有未提交修改，已禁止拉取"
-                              : "从 GitHub 拉取最新提交"
-                          }
-                        >
-                          <span className="inline-flex items-center gap-1.5">
-                            <svg
-                              width="12"
-                              height="12"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              className={isPulling ? "animate-spin" : ""}
+                        {/* Counts Pill & Batch Actions */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {selectedRepo.skills.filter((s) => s.isCoreInstalled).length > 0 && (
+                            <button
+                              onClick={() => {
+                                const coreSkills = selectedRepo.skills
+                                  .filter((s) => s.isCoreInstalled)
+                                  .map((s) => s.name)
+                                setBatchConfirmModal({
+                                  repo: selectedRepo,
+                                  skillNames: coreSkills,
+                                  action: "remove",
+                                })
+                              }}
+                              disabled={batchRemovingCore}
+                              className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-600 hover:bg-red-500/20 disabled:opacity-40 transition-colors"
+                              title={t("Batch remove from Core")}
                             >
-                              <path d="M12 3v12" />
-                              <path d="m8 11 4 4 4-4" />
-                              <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4" />
-                            </svg>
-                            {isPulling ? t("Updating...") : t("Pull latest")}
+                              {t("Batch remove from Core")} (
+                              {selectedRepo.skills.filter((s) => s.isCoreInstalled).length})
+                            </button>
+                          )}
+                          <span className="rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-semibold text-foreground">
+                            {selectedRepo.skills.length} {t("skills")}
                           </span>
-                        </button>
-
-                        {/* Open in Finder */}
-                        <button
-                          onClick={() => void electronAPI.openInFinder(repo.path)}
-                          className="rounded-lg border border-border bg-background p-1.5 text-muted hover:text-foreground hover:bg-surface"
-                          title="在访达中显示仓库文件夹"
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                          </svg>
-                        </button>
-
-                        {/* Untrack / Delete */}
-                        <button
-                          onClick={() => {
-                            setRemoveTargetRepo(repo)
-                            setRemoveAction("unlink")
-                            setRemoveError(null)
-                          }}
-                          className="rounded-lg border border-border bg-background p-1.5 text-muted hover:text-red-400 hover:bg-surface"
-                          title="取消跟踪并删除本地仓库"
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M3 6h18" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Commit message footer if available */}
-                    {repo.commitMessage && (
-                      <div className="px-5 py-1.5 bg-background/50 border-t border-border/40 text-[11px] text-muted truncate">
-                        <span className="font-mono text-[10px] text-foreground/60 mr-2">
-                          latest:
-                        </span>
-                        {repo.commitMessage}
-                      </div>
-                    )}
-
-                    {/* Repo Card Body: Skills Grid */}
-                    {isExpanded && (
-                      <div className="border-t border-border p-5 bg-background/30">
-                        <div className="mb-3 flex items-center justify-between">
-                          <span className="text-[12px] font-semibold text-foreground">
-                            {t("Discovered Skills")} ({repo.skills.length})
-                          </span>
-                          <span className="text-[11px] text-muted">
-                            {repo.skills.filter((s) => s.isCoreInstalled || s.installedAgents.length > 0)
-                              .length}{" "}
+                          <span className="rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-muted">
+                            {selectedRepo.skills.filter((s) => s.isCoreInstalled || s.installedAgents.length > 0).length}{" "}
                             {t("installed")}
                           </span>
                         </div>
+                      </div>
 
-                        {repo.skills.length === 0 ? (
-                          <div className="rounded-xl border border-dashed border-border p-6 text-center text-[12px] text-muted">
-                            该仓库根目录及子目录中暂未找到有效的 SKILL.md
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                            {repo.skills.map((skill) => {
-                              const isInstalledSomewhere =
-                                skill.isCoreInstalled || skill.installedAgents.length > 0
-                              const isInstallingThis = installingSkill === skill.name
+                      {/* Commit message banner */}
+                      {selectedRepo.commitMessage && (
+                        <div className="rounded-lg border border-border/60 bg-background/50 px-3 py-1.5 text-[11px] text-muted truncate">
+                          <span className="font-mono text-[10px] text-foreground/60 mr-2">
+                            latest:
+                          </span>
+                          {selectedRepo.commitMessage}
+                        </div>
+                      )}
 
-                              return (
-                                <div
-                                  key={skill.name}
-                                  className="flex flex-col justify-between rounded-xl border border-border bg-background p-3.5 shadow-sm"
+                      {/* Filter skills search box & selection toolbar */}
+                      {selectedRepo.skills.length > 0 && (
+                        <div className="mt-4 pt-3.5 border-t border-border/40 flex flex-col gap-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="relative flex-1 max-w-sm">
+                              <input
+                                type="text"
+                                value={skillSearch}
+                                onChange={(e) => setSkillSearch(e.target.value)}
+                                placeholder={t("Filter skills in this source...")}
+                                className="w-full rounded-lg border border-border bg-background px-3 py-1.5 pl-8 text-[12px] text-foreground placeholder:text-muted/60 focus:outline-none focus:border-foreground/40"
+                              />
+                              <svg
+                                width="13"
+                                height="13"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted"
+                              >
+                                <circle cx="11" cy="11" r="8" />
+                                <path d="m21 21-4.3-4.3" />
+                              </svg>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {skillSearch && (
+                                <button
+                                  onClick={() => setSkillSearch("")}
+                                  className="text-[11px] text-muted hover:text-foreground transition-colors mr-2"
                                 >
-                                  <div>
-                                    <div className="flex items-center justify-between gap-2 mb-1.5">
-                                      <span className="text-[13px] font-bold text-foreground font-mono truncate">
-                                        {skill.name}
-                                      </span>
-                                      {skill.isCoreInstalled ? (
-                                        <span className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
-                                          Core
-                                        </span>
-                                      ) : skill.installedAgents.length > 0 ? (
-                                        <span className="rounded-full bg-blue-500/20 border border-blue-500/40 px-2 py-0.5 text-[10px] font-semibold text-blue-400">
-                                          {skill.installedAgents.length} tools
-                                        </span>
-                                      ) : (
-                                        <span className="rounded-full bg-border px-2 py-0.5 text-[10px] font-medium text-muted">
-                                          未安装
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    {skill.description ? (
-                                      <p className="text-[11px] text-muted line-clamp-2 leading-relaxed mb-3">
-                                        {skill.description}
-                                      </p>
-                                    ) : (
-                                      <p className="text-[11px] text-muted/60 italic mb-3">
-                                        No description
-                                      </p>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center justify-between pt-2 border-t border-border/40 gap-2">
-                                    <span className="text-[10px] font-mono text-muted/80 truncate">
-                                      {skill.subPath}
-                                    </span>
-
-                                    {!skill.isCoreInstalled && (
-                                      <button
-                                        onClick={() =>
-                                          void handleInstallSkillToCore(repo, skill.name)
-                                        }
-                                        disabled={isInstallingThis}
-                                        className="rounded-md bg-foreground px-2.5 py-1 text-[10px] font-medium text-background hover:opacity-90 disabled:opacity-50 whitespace-nowrap"
-                                      >
-                                        {isInstallingThis
-                                          ? t("Installing...")
-                                          : t("Install to Core")}
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              )
-                            })}
+                                  {t("Clear filter")}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  const coreSkills = selectedRepo.skills
+                                    .filter((s) => s.isCoreInstalled)
+                                    .map((s) => s.name)
+                                  setSelectedSkillNames(new Set(coreSkills))
+                                }}
+                                className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted hover:text-foreground hover:bg-surface transition-colors"
+                              >
+                                {t("Select all installed in Core")}
+                              </button>
+                            </div>
                           </div>
-                        )}
+
+                          {/* Selected Batch Action Bar */}
+                          {selectedSkillNames.size > 0 && (
+                            <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-border bg-background text-[12px]">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-foreground">
+                                  {t("Selected")} {selectedSkillNames.size} {t("skills")}
+                                </span>
+                                <button
+                                  onClick={() => setSelectedSkillNames(new Set())}
+                                  className="text-muted hover:text-foreground text-[11px] ml-2"
+                                >
+                                  {t("Clear selection")}
+                                </button>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {(() => {
+                                  const selInstalled = selectedRepo.skills.filter(
+                                    (s) => selectedSkillNames.has(s.name) && s.isCoreInstalled,
+                                  )
+                                  const selNotInstalled = selectedRepo.skills.filter(
+                                    (s) => selectedSkillNames.has(s.name) && !s.isCoreInstalled,
+                                  )
+                                  return (
+                                    <>
+                                      {selNotInstalled.length > 0 && (
+                                        <button
+                                          onClick={() =>
+                                            setBatchConfirmModal({
+                                              repo: selectedRepo,
+                                              skillNames: selNotInstalled.map((s) => s.name),
+                                              action: "install",
+                                            })
+                                          }
+                                          disabled={batchRemovingCore}
+                                          className="rounded-lg bg-foreground px-3 py-1 text-[11px] font-medium text-background hover:opacity-90 disabled:opacity-40"
+                                        >
+                                          {t("Install selected to Core")} ({selNotInstalled.length})
+                                        </button>
+                                      )}
+                                      {selInstalled.length > 0 && (
+                                        <button
+                                          onClick={() =>
+                                            setBatchConfirmModal({
+                                              repo: selectedRepo,
+                                              skillNames: selInstalled.map((s) => s.name),
+                                              action: "remove",
+                                            })
+                                          }
+                                          disabled={batchRemovingCore}
+                                          className="rounded-lg bg-red-600 px-3 py-1 text-[11px] font-medium text-white hover:bg-red-700 disabled:opacity-40"
+                                        >
+                                          {t("Remove selected from Core")} ({selInstalled.length})
+                                        </button>
+                                      )}
+                                    </>
+                                  )
+                                })()}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Discovered Skills Grid */}
+                    {selectedRepo.skills.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-[12px] text-muted">
+                        {t("No skills found in this source.")}
+                      </div>
+                    ) : filteredSkills.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-[12px] text-muted">
+                        {t("No skills match your filter.")}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                        {filteredSkills.map((skill) => {
+                          const isInstallingThis = installingSkill === skill.name
+
+                          return (
+                            <div
+                              key={skill.name}
+                              className="flex flex-col justify-between rounded-xl border border-border bg-surface p-3.5 shadow-sm hover:border-border/80 transition-colors"
+                            >
+                              <div>
+                                <div className="flex items-center justify-between gap-2 mb-1.5">
+                                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedSkillNames.has(skill.name)}
+                                      onChange={(e) => {
+                                        const next = new Set(selectedSkillNames)
+                                        if (e.target.checked) next.add(skill.name)
+                                        else next.delete(skill.name)
+                                        setSelectedSkillNames(next)
+                                      }}
+                                      className="rounded border-border text-primary focus:ring-0 cursor-pointer"
+                                    />
+                                    <span className="text-[13px] font-bold text-foreground font-mono truncate">
+                                      {skill.name}
+                                    </span>
+                                  </div>
+                                  {skill.isCoreInstalled ? (
+                                    <span className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 shrink-0">
+                                      Core
+                                    </span>
+                                  ) : skill.installedAgents.length > 0 ? (
+                                    <span className="rounded-full bg-blue-500/20 border border-blue-500/40 px-2 py-0.5 text-[10px] font-semibold text-blue-400 shrink-0">
+                                      {skill.installedAgents.length} tools
+                                    </span>
+                                  ) : (
+                                    <span className="rounded-full bg-border px-2 py-0.5 text-[10px] font-medium text-muted shrink-0">
+                                      {t("Not installed")}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {skill.description ? (
+                                  <p className="text-[11px] text-muted line-clamp-2 leading-relaxed mb-3">
+                                    {skill.description}
+                                  </p>
+                                ) : (
+                                  <p className="text-[11px] text-muted/60 italic mb-3">
+                                    No description
+                                  </p>
+                                )}
+                              </div>
+
+                              <div className="flex items-center justify-between pt-2 border-t border-border/40 gap-2">
+                                <span className="text-[10px] font-mono text-muted/80 truncate">
+                                  {skill.subPath}
+                                </span>
+
+                                {!skill.isCoreInstalled ? (
+                                  <button
+                                    onClick={() =>
+                                      void handleInstallSkillToCore(selectedRepo, skill.name)
+                                    }
+                                    disabled={isInstallingThis}
+                                    className="rounded-md bg-foreground px-2.5 py-1 text-[10px] font-medium text-background hover:opacity-90 disabled:opacity-50 whitespace-nowrap"
+                                  >
+                                    {isInstallingThis
+                                      ? t("Installing...")
+                                      : t("Install to Core")}
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      void handleRemoveSkillFromCore(skill.name)
+                                    }
+                                    disabled={removingSkill === skill.name}
+                                    className="rounded-md border border-border bg-background px-2.5 py-1 text-[10px] font-medium text-muted hover:text-red-500 hover:border-red-500/40 disabled:opacity-50 whitespace-nowrap"
+                                  >
+                                    {removingSkill === skill.name
+                                      ? t("Removing...")
+                                      : t("Remove from Core")}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
-                  </div>
-                )
-              })}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -978,6 +1271,70 @@ export function ScanSources() {
                 className="rounded-lg bg-red-600 px-4 py-2 text-[12px] font-medium text-white hover:bg-red-500 disabled:opacity-50"
               >
                 {removingRepo ? "正在移除…" : "确认移除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Confirm Modal */}
+      {batchConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-foreground mb-1">
+              {batchConfirmModal.action === "remove"
+                ? t("Batch remove from Core")
+                : t("Install selected to Core")}
+            </h3>
+            <p className="text-[12px] text-muted mb-4">
+              <span className="font-semibold text-foreground mr-1">
+                {batchConfirmModal.skillNames.length} {t("skills")}
+              </span>
+              <span>
+                {batchConfirmModal.action === "remove"
+                  ? "来自 " + batchConfirmModal.repo.displayName + "。从 Core 移除后将停止向全部 Agent 工具同步，但 Git 仓库源码仍完好保留在本地。"
+                  : "即将安装并链接到 Core (~/.agents/skills) 以及已连接的全部 Agent 工具。"}
+              </span>
+            </p>
+
+            <div className="max-h-40 overflow-y-auto rounded-lg border border-border bg-background p-2.5 space-y-1 mb-4">
+              {batchConfirmModal.skillNames.map((name) => (
+                <div key={name} className="text-[11px] font-mono text-foreground px-1 py-0.5 truncate">
+                  {name}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+              <button
+                type="button"
+                onClick={() => setBatchConfirmModal(null)}
+                disabled={batchRemovingCore}
+                className="rounded-lg border border-border bg-background px-4 py-2 text-[12px] font-medium text-foreground hover:bg-surface disabled:opacity-40"
+              >
+                {t("Cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (batchConfirmModal.action === "remove") {
+                    void handleBatchRemoveFromCore(batchConfirmModal.skillNames)
+                  } else {
+                    void handleBatchInstallToCore(batchConfirmModal.repo, batchConfirmModal.skillNames)
+                  }
+                }}
+                disabled={batchRemovingCore}
+                className={`rounded-lg px-4 py-2 text-[12px] font-medium text-white transition-colors disabled:opacity-40 ${
+                  batchConfirmModal.action === "remove"
+                    ? "bg-red-600 hover:bg-red-700"
+                    : "bg-primary hover:bg-primary/90"
+                }`}
+              >
+                {batchRemovingCore
+                  ? "正在处理…"
+                  : batchConfirmModal.action === "remove"
+                  ? `${t("Remove from Core")} (${batchConfirmModal.skillNames.length})`
+                  : `${t("Install to Core")} (${batchConfirmModal.skillNames.length})`}
               </button>
             </div>
           </div>
