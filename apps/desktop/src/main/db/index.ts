@@ -2,7 +2,7 @@ import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
 import fs from "node:fs"
-import { runMigrations } from "./migrations"
+import { runMigrations } from "@skillsgate/local-db"
 
 // Use createRequire to load better-sqlite3 at runtime.
 // This prevents Vite/Rollup from trying to bundle the native module.
