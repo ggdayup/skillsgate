@@ -42,7 +42,7 @@
   "thresholds": {
     "heartbeat_warn_seconds": 300,
     "stalled_seconds": 900,
-    "leader_lease_seconds": 180,
+    "leader_lease_seconds": 86400,
     "quota_warn_pct": 20,
     "review_fanout": 2
   }

@@ -1,0 +1,17 @@
+{
+  "_comment": "Role routing for fleet-agent roles. fleet_agent_role() in fleet-lib.sh reads THIS file (not lanes/groups.json): without it every agent resolves to default_role=other and DONE notices are silently archived without dispatching review. lanes/groups.json answers a different question — which group/family an agent belongs to for the ternary cross-family rule.",
+  "agents": {
+    "agy-coder-1": "coder",
+    "agy-coder-2": "coder",
+    "agy-coder-3": "coder",
+    "agy-coder-4": "coder",
+    "agy-coder-5": "coder",
+    "spark-reviewer-1": "reviewer"
+  },
+  "patterns": {
+    "(^|-)coder(-[0-9]+)?$": "coder",
+    "(^|-)reviewer?(-[0-9]+)?$": "reviewer"
+  },
+  "default_role": "other",
+  "test_command": "cd packages/cli && bun run test"
+}
