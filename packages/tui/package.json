@@ -8,11 +8,13 @@
   "scripts": {
     "postinstall": "node bin/postinstall.cjs",
     "dev": "bun --watch run src/index.tsx",
-    "start": "bun run src/index.tsx"
+    "start": "bun run src/index.tsx",
+    "test": "tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@opentui/core": "0.1.90",
     "@opentui/react": "0.1.90",
+    "@skillsgate/skill-sources": "*",
     "gray-matter": "4.0.3"
   },
   "peerDependencies": {

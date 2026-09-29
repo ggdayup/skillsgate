@@ -1,10 +1,11 @@
 ---
 # skillsgate-zdbl
 title: 'fix(tui): stop spawning npx skills, route installs through SkillsGate'
-status: todo
+status: completed
 type: bug
+priority: normal
 created_at: 2026-09-29T11:27:28Z
-updated_at: 2026-09-29T11:27:28Z
+updated_at: 2026-09-29T11:49:04Z
 ---
 
 ADR-0008 states the invariant that install sources are parsed, never executed. The desktop paste path honours it; the TUI does not.
