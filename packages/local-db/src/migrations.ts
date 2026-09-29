@@ -1,13 +1,31 @@
-import type { SqliteDriver } from "./types.js"
+import type { SqliteDriver, SqliteStatement } from "./types.js"
+
+export interface MigrationDriver {
+  exec(sql: string): void
+  prepare?: (sql: string) => SqliteStatement
+  query?: (sql: string) => SqliteStatement
+}
+
+export type MigrationDb = SqliteDriver | MigrationDriver
 
 export interface Migration {
   version: number
-  up: string | ((driver: SqliteDriver) => void)
+  up: string | ((driver: MigrationDb) => void)
 }
 
-function getTableColumns(driver: SqliteDriver, tableName: string): Set<string> {
+function prepareStatement(driver: MigrationDb, sql: string): SqliteStatement {
+  if ("prepare" in driver && typeof driver.prepare === "function") {
+    return driver.prepare(sql)
+  }
+  if ("query" in driver && typeof (driver as any).query === "function") {
+    return (driver as any).query(sql)
+  }
+  throw new Error("SQLite driver must provide prepare() or query()")
+}
+
+function getTableColumns(driver: MigrationDb, tableName: string): Set<string> {
   try {
-    const rows = driver.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>
+    const rows = prepareStatement(driver, `PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>
     return new Set(rows.map((r) => r.name))
   } catch {
     return new Set()
@@ -102,7 +120,7 @@ export const MIGRATIONS: Migration[] = [
   },
   {
     version: 5,
-    up: (driver: SqliteDriver) => {
+    up: (driver: MigrationDb) => {
       // Reconcile schema drift across surfaces without data loss.
       // 1. Ensure remote_servers has auto_sync.
       const serverCols = getTableColumns(driver, "remote_servers")
@@ -133,10 +151,9 @@ export const MIGRATIONS: Migration[] = [
   },
 ]
 
-export function getCurrentVersion(driver: SqliteDriver): number {
+export function getCurrentVersion(driver: MigrationDb): number {
   try {
-    const row = driver
-      .prepare("SELECT MAX(version) as v FROM schema_version")
+    const row = prepareStatement(driver, "SELECT MAX(version) as v FROM schema_version")
       .get() as { v: number | null } | undefined
     return row?.v ?? 0
   } catch {
@@ -144,7 +161,7 @@ export function getCurrentVersion(driver: SqliteDriver): number {
   }
 }
 
-export function runMigrations(driver: SqliteDriver): void {
+export function runMigrations(driver: MigrationDb): void {
   // Ensure schema_version table exists before reading or inserting versions
   driver.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -162,8 +179,7 @@ export function runMigrations(driver: SqliteDriver): void {
         migration.up(driver)
       }
 
-      driver
-        .prepare("INSERT OR IGNORE INTO schema_version (version) VALUES (?)")
+      prepareStatement(driver, "INSERT OR IGNORE INTO schema_version (version) VALUES (?)")
         .run(migration.version)
     }
   }
