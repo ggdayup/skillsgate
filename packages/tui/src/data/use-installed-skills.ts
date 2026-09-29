@@ -7,7 +7,7 @@ import { useStore, useDispatch } from "../store/context.js"
 import { useDb } from "../db/context.js"
 import { agents } from "../../../cli/src/core/agents.js"
 import { readSkillLock } from "../../../cli/src/core/skill-lock.js"
-import { parseFrontmatterFallback } from "../../../cli/src/core/source-parser.js"
+import { parseFrontmatterFallback } from "../../../skill-sources/src/index.js"
 import { SKILL_MD } from "../../../cli/src/constants.js"
 import { loadCachedSkills, saveCachedSkills, type CachedSkill } from "../db/skills-cache.js"
 import type { EnrichedSkill } from "../store/types.js"
@@ -244,6 +244,7 @@ async function fullScan(
         const skillDirPath = path.join(skillsDir, entry.name)
         const skillMdPath = path.join(skillDirPath, SKILL_MD)
         try {
+          const raw = await fs.readFile(skillMdPath, "utf-8")
           let frontmatter: any
           try {
             frontmatter = matter(raw).data
