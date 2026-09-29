@@ -57,5 +57,7 @@ export const agentBadges: Record<string, { label: string; color: string }> = {
   workbuddy:        { label: "WB", color: "#07C160" }, // green
   "workbuddy-ai":   { label: "WBA", color: "#10B981" }, // emerald
   mercury:          { label: "MC", color: "#64748B" }, // slate
+  qoder:            { label: "QD",  color: "#10B981" }, // emerald — Qoder ribbon green
+  "qoder-cn":       { label: "QCN", color: "#FF6A00" }, // ali orange
   core:             { label: "★",  color: "#0F6E56" }, // teal — the core skill set
 }

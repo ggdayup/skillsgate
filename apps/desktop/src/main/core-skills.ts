@@ -22,7 +22,10 @@ import {
   CORE_CONFIG_VERSION,
   CORE_SKILLS_DIR,
   SKILL_ROOTS,
+  SKILLS_LIBRARY_DIR,
 } from "./skill-paths"
+
+export type CoreRemoveMode = "detach" | "purge"
 
 /** Structural subset of ipc-handlers' AgentEntry. */
 export interface CoreAgent {
@@ -689,6 +692,26 @@ export async function findDanglingCoreEntries(): Promise<
   return out
 }
 
+async function purgeFromSkillsLibrary(safeName: string): Promise<void> {
+  try {
+    const top = path.join(SKILLS_LIBRARY_DIR, safeName)
+    if (await pathExists(top)) {
+      await fs.rm(top, { recursive: true, force: true })
+    }
+    const entries = await readdirSafe(SKILLS_LIBRARY_DIR)
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith(".")) {
+        const sub = path.join(SKILLS_LIBRARY_DIR, e.name, safeName)
+        if (await pathExists(sub)) {
+          await fs.rm(sub, { recursive: true, force: true })
+        }
+      }
+    }
+  } catch {
+    // Best effort
+  }
+}
+
 /**
  * Mirrors the CLI's removeCoreSkill. A core entry that is already gone is not
  * an error — the UI row can survive purely as a dangling link in a tool dir,
@@ -697,6 +720,7 @@ export async function findDanglingCoreEntries(): Promise<
 export async function removeCoreSkill(
   name: string,
   agents: CoreAgent[],
+  options?: { mode?: CoreRemoveMode },
 ): Promise<{
   ok: boolean
   unlinked: number
@@ -704,6 +728,7 @@ export async function removeCoreSkill(
   coreEntryMissing: boolean
   error?: string
 }> {
+  const mode = options?.mode ?? "detach"
   const safeName = sanitizeName(name)
   const target = path.join(CORE_SKILLS_DIR, safeName)
   if (!isPathSafe(target, CORE_SKILLS_DIR)) {
@@ -719,8 +744,18 @@ export async function removeCoreSkill(
   let coreEntryMissing = false
   try {
     const lst = await fs.lstat(target)
-    if (lst.isSymbolicLink()) await fs.unlink(target)
-    else await fs.rm(target, { recursive: true, force: true })
+    if (lst.isSymbolicLink()) {
+      await fs.unlink(target)
+    } else {
+      if (mode === "detach") {
+        const canonicalTarget = path.join(CANONICAL_SKILLS_DIR, safeName)
+        if (!(await pathExists(canonicalTarget))) {
+          await fs.mkdir(CANONICAL_SKILLS_DIR, { recursive: true })
+          await fs.cp(target, canonicalTarget, { recursive: true, dereference: true })
+        }
+      }
+      await fs.rm(target, { recursive: true, force: true })
+    }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code !== "ENOENT") {
@@ -735,6 +770,16 @@ export async function removeCoreSkill(
     coreEntryMissing = true
   }
 
+  if (mode === "purge") {
+    const canonicalTarget = path.join(CANONICAL_SKILLS_DIR, safeName)
+    try {
+      await fs.rm(canonicalTarget, { recursive: true, force: true })
+    } catch {
+      // Best effort
+    }
+    await purgeFromSkillsLibrary(safeName)
+  }
+
   let unlinked = 0
   const residualCopies: string[] = []
   for (const agent of agents) {
@@ -746,7 +791,11 @@ export async function removeCoreSkill(
     try {
       const lst = await fs.lstat(agentPath)
       if (!lst.isSymbolicLink() && lst.isDirectory()) {
-        residualCopies.push(`${agent.displayName}: ${agentPath}`)
+        if (mode === "purge") {
+          await fs.rm(agentPath, { recursive: true, force: true })
+        } else {
+          residualCopies.push(`${agent.displayName}: ${agentPath}`)
+        }
       }
     } catch {
       // nothing there

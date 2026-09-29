@@ -7,6 +7,14 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./format": {
+      "types": "./src/format-install-command.ts",
+      "default": "./src/format-install-command.ts"
+    },
+    "./format-install-command": {
+      "types": "./src/format-install-command.ts",
+      "default": "./src/format-install-command.ts"
     }
   },
   "scripts": {

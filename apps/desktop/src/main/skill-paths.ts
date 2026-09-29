@@ -17,6 +17,9 @@ export const CANONICAL_SKILLS_DIR = path.join(AGENTS_ROOT, ".store")
 /** Persistent local Git repositories for cloned skill sources. */
 export const STORE_REPOS_DIR = path.join(CANONICAL_SKILLS_DIR, "repos")
 
+/** Skills library (archive / cold storage). */
+export const SKILLS_LIBRARY_DIR = path.join(AGENTS_ROOT, "skills-library")
+
 /** Originals displaced by an explicit "replace" on a conflict. */
 export const BACKUP_DIR = path.join(AGENTS_ROOT, ".backup")
 

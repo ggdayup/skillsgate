@@ -40,6 +40,10 @@ export const CANONICAL_SKILLS_DIR = () =>
 export const STORE_REPOS_DIR = () =>
   path.join(CANONICAL_SKILLS_DIR(), REPOS_SUBDIR);
 
+/** Skills library (archive / cold storage). */
+export const SKILLS_LIBRARY_DIR = () =>
+  path.join(os.homedir(), AGENTS_DIR, "skills-library");
+
 /** The core skill set. Everything here fans out to every detected agent. */
 export const CORE_SKILLS_DIR = () =>
   path.join(os.homedir(), AGENTS_DIR, SKILLS_SUBDIR);

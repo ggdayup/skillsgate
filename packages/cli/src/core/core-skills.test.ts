@@ -21,9 +21,15 @@ const claudeDir = path.join(home, ".claude", "skills");
 const zedRealDir = path.join(home, "synced", "zed", "skills");
 const zedLogicalDir = path.join(home, ".config", "zed", "skills");
 
-const { planCoreSync, applyCoreSync, removeCoreSkill } = await import(
-  "./core-skills.js"
-);
+const {
+  planCoreSync,
+  applyCoreSync,
+  removeCoreSkill,
+  installDirToCore,
+  resolveLocalSkill,
+  findDanglingCoreEntries,
+} = await import("./core-skills.js");
+const { addPathToCore } = await import("../commands/core.js");
 
 async function mkCoreEntry(name: string): Promise<string> {
   const dir = path.join(coreDir, name);
@@ -75,6 +81,36 @@ describe("removeCoreSkill", () => {
     assert.deepEqual(res.residualCopies, []);
     assert.equal(await exists(entry), false);
     assert.equal(await exists(link), false);
+  });
+
+  it("preserves a real directory in canonical store when detaching from core", async () => {
+    const entry = await mkCoreEntry("preserved-skill");
+    const link = await linkFromClaude("preserved-skill", entry);
+
+    const res = await removeCoreSkill("preserved-skill", { mode: "detach" });
+
+    assert.equal(res.ok, true);
+    assert.equal(await exists(entry), false);
+    assert.equal(await exists(link), false);
+    const storePath = path.join(home, ".agents", ".store", "preserved-skill");
+    assert.equal(await exists(storePath), true);
+  });
+
+  it("purges a skill completely from core, store, and library", async () => {
+    const entry = await mkCoreEntry("purged-skill");
+    const link = await linkFromClaude("purged-skill", entry);
+    const libraryPath = path.join(home, ".agents", "skills-library", "purged-skill");
+    await fs.mkdir(libraryPath, { recursive: true });
+    const storePath = path.join(home, ".agents", ".store", "purged-skill");
+    await fs.mkdir(storePath, { recursive: true });
+
+    const res = await removeCoreSkill("purged-skill", { mode: "purge" });
+
+    assert.equal(res.ok, true);
+    assert.equal(await exists(entry), false);
+    assert.equal(await exists(link), false);
+    assert.equal(await exists(storePath), false);
+    assert.equal(await exists(libraryPath), false);
   });
 
   it("sweeps a dangling tool link when the core entry is already gone", async () => {
@@ -157,3 +193,211 @@ describe("fan-out links", () => {
     assert.equal(second.alreadyPresent, 1);
   });
 });
+
+describe("installDirToCore", () => {
+  it("symlinks an external directory into core in link mode", async () => {
+    const externalDir = path.join(home, "external-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# External Skill\n");
+
+    const res = await installDirToCore(externalDir, "external-skill", {
+      mode: "link",
+    });
+
+    assert.equal(res.ok, true);
+    const target = path.join(coreDir, "external-skill");
+    const lst = await fs.lstat(target);
+    assert.equal(lst.isSymbolicLink(), true);
+    const content = await fs.readFile(path.join(target, "SKILL.md"), "utf-8");
+    assert.equal(content, "# External Skill\n");
+
+    const second = await installDirToCore(externalDir, "external-skill", {
+      mode: "link",
+    });
+    assert.equal(second.ok, true);
+    assert.equal(second.already, true);
+  });
+
+  it("copies an external directory into core in copy mode", async () => {
+    const externalDir = path.join(home, "copy-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Copy Skill\n");
+
+    const res = await installDirToCore(externalDir, "copy-skill", {
+      mode: "copy",
+    });
+
+    assert.equal(res.ok, true);
+    const target = path.join(coreDir, "copy-skill");
+    const lst = await fs.lstat(target);
+    assert.equal(lst.isDirectory(), true);
+    assert.equal(lst.isSymbolicLink(), false);
+  });
+
+  it("defaults to link mode when mode is omitted", async () => {
+    const externalDir = path.join(home, "default-mode-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Default Mode Skill\n");
+
+    const res = await installDirToCore(externalDir, "default-mode-skill");
+
+    assert.equal(res.ok, true);
+    const target = path.join(coreDir, "default-mode-skill");
+    const lst = await fs.lstat(target);
+    assert.equal(lst.isSymbolicLink(), true);
+  });
+
+  it("refuses to clobber existing entry when replace is false", async () => {
+    const dirA = path.join(home, "conflict-source-a");
+    const dirB = path.join(home, "conflict-source-b");
+    await fs.mkdir(dirA, { recursive: true });
+    await fs.mkdir(dirB, { recursive: true });
+    await fs.writeFile(path.join(dirA, "SKILL.md"), "# Skill A\n");
+    await fs.writeFile(path.join(dirB, "SKILL.md"), "# Skill B\n");
+
+    const first = await installDirToCore(dirA, "conflict-skill");
+    assert.equal(first.ok, true);
+
+    const second = await installDirToCore(dirB, "conflict-skill", {
+      replace: false,
+    });
+    assert.equal(second.ok, false);
+    assert.equal(second.conflict, true);
+  });
+
+  it("replaces existing entry and saves backup when replace is true", async () => {
+    const dirA = path.join(home, "replace-source-a");
+    const dirB = path.join(home, "replace-source-b");
+    await fs.mkdir(dirA, { recursive: true });
+    await fs.mkdir(dirB, { recursive: true });
+    await fs.writeFile(path.join(dirA, "SKILL.md"), "# Skill A\n");
+    await fs.writeFile(path.join(dirB, "SKILL.md"), "# Skill B\n");
+
+    await installDirToCore(dirA, "replace-skill");
+
+    const res = await installDirToCore(dirB, "replace-skill", { replace: true });
+    assert.equal(res.ok, true);
+
+    const target = path.join(coreDir, "replace-skill");
+    const content = await fs.readFile(path.join(target, "SKILL.md"), "utf-8");
+    assert.equal(content, "# Skill B\n");
+
+    const backupDir = path.join(home, ".agents", ".backup");
+    const backups = await fs.readdir(backupDir);
+    const found = backups.some((name) => name.startsWith("core--replace-skill--"));
+    assert.equal(found, true);
+  });
+
+  it("neutralises path traversal in skill name", async () => {
+    const externalDir = path.join(home, "traversal-skill");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Traversal\n");
+
+    const res = await installDirToCore(externalDir, "../outside");
+    assert.equal(res.ok, true);
+    assert.equal(res.path.startsWith(coreDir), true);
+    assert.equal(path.basename(res.path), "..-outside");
+  });
+});
+
+describe("resolveLocalSkill", () => {
+  it("resolves skill with frontmatter name", async () => {
+    const skillDir = path.join(home, "frontmatter-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    const content = "---\nname: Frontmatter Skill\ndescription: Test description\n---\n# Docs\n";
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), content);
+
+    const res = await resolveLocalSkill(skillDir);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    assert.equal(res.name, "frontmatter-skill");
+    assert.equal(res.skillDir, skillDir);
+  });
+
+  it("falls back to directory name when frontmatter name is missing", async () => {
+    const skillDir = path.join(home, "plain-dir-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Plain Markdown\n");
+
+    const res = await resolveLocalSkill(skillDir);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    assert.equal(res.name, "plain-dir-skill");
+    assert.equal(res.skillDir, skillDir);
+  });
+
+  it("prefers explicit name over frontmatter name", async () => {
+    const skillDir = path.join(home, "named-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    const content = "---\nname: original-name\ndescription: Test\n---\n";
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), content);
+
+    const res = await resolveLocalSkill(skillDir, "custom-alias");
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    assert.equal(res.name, "custom-alias");
+  });
+
+  it("resolves when path points directly to SKILL.md", async () => {
+    const skillDir = path.join(home, "direct-file-skill");
+    await fs.mkdir(skillDir, { recursive: true });
+    const file = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(file, "# Direct File\n");
+
+    const res = await resolveLocalSkill(file);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    assert.equal(res.name, "direct-file-skill");
+    assert.equal(res.skillDir, skillDir);
+  });
+
+  it("returns error when directory does not exist", async () => {
+    const res = await resolveLocalSkill(path.join(home, "does-not-exist"));
+    assert.equal(res.ok, false);
+    if (res.ok) return;
+    assert.match(res.error, /Directory not found/);
+  });
+
+  it("returns error when SKILL.md is missing", async () => {
+    const emptyDir = path.join(home, "empty-dir");
+    await fs.mkdir(emptyDir, { recursive: true });
+
+    const res = await resolveLocalSkill(emptyDir);
+    assert.equal(res.ok, false);
+    if (res.ok) return;
+    assert.match(res.error, /does not contain a SKILL\.md file/);
+  });
+});
+
+describe("findDanglingCoreEntries", () => {
+  it("finds broken symlinks in core directory", async () => {
+    const externalDir = path.join(home, "temporary-source");
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "SKILL.md"), "# Temp\n");
+
+    await installDirToCore(externalDir, "dangling-candidate", { mode: "link" });
+    await fs.rm(externalDir, { recursive: true, force: true });
+
+    const dangling = await findDanglingCoreEntries();
+    const match = dangling.find((d) => d.name === "dangling-candidate");
+    assert.ok(match);
+  });
+});
+
+describe("addPathToCore", () => {
+  it("adds local skill to core and syncs with detected agents", async () => {
+    const localDir = path.join(home, "integration-skill");
+    await fs.mkdir(localDir, { recursive: true });
+    await fs.writeFile(
+      path.join(localDir, "SKILL.md"),
+      "---\nname: integration-skill\ndescription: Integration test\n---\n",
+    );
+
+    const ok = await addPathToCore(localDir);
+    assert.equal(ok, true);
+
+    const target = path.join(coreDir, "integration-skill");
+    assert.equal(await exists(target), true);
+  });
+});
+

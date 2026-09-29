@@ -1,16 +1,16 @@
 ---
 # skillsgate-trar
 title: 'Desktop /core: Remove on a stale-link-only skill does nothing (invisible error)'
-status: in-progress
+status: completed
 type: bug
 priority: normal
 created_at: 2026-09-22T10:26:42Z
-updated_at: 2026-09-25T10:59:47Z
+updated_at: 2026-09-29T09:08:00Z
 ---
 
-Repro: wechat-computer-use. Core entry was moved to ~/.Trash, but ~/.gemini/antigravity-cli/skills/wechat-computer-use is still a dangling symlink into ~/.agents/skills. planCoreSync() emits an 'unlink' item for that name (findDanglingCoreLinks, core-skills.ts:352), and groupBySkill in apps/desktop/src/renderer/routes/core.tsx:75-88 synthesizes a row for any skill name in the plan — even one absent from listCoreEntries. So the row appears in 'Core skills' with a Remove button. Clicking Remove->Confirm calls coreRemove -> removeCoreSkill -> fs.lstat(core/<name>) -> ENOENT -> {ok:false, error:'core 中不存在该技能'}; the IPC handler (ipc-handlers.ts:2471) throws. The renderer catches it into setError, but the error <p> renders in the TOP summary card (core.tsx:412) while the Remove buttons live in the per-skill list far below (core.tsx:573+) -> user scrolled to row 'w' sees literally nothing. Verified by running the desktop main modules against the real ~/.agents.
+Repro: wechat-computer-use. Core entry was moved to ~/.Trash, but ~/.gemini/antigravity-cli/skills/wechat-computer-use is still a dangling symlink into ~/.agents/skills. planCoreSync() emits an 'unlink' item for that name (findDanglingCoreLinks, core-skills.ts:352), and groupBySkill in apps/desktop/src/renderer/routes/core.tsx:75-88 synthesizes a row for any skill name in the plan. Even one absent from listCoreEntries is synthesized. So the row appears in 'Core skills' with a Remove button. Clicking Remove then Confirm calls coreRemove then removeCoreSkill. That resulted in ENOENT and the IPC handler threw. The renderer caught it into setError, but the error paragraph rendered in the top summary card while the Remove buttons lived in the per-skill list far below.
 
-Fix options: (1) make removeCoreSkill idempotent — missing core entry should not abort; still sweep the agent-side dangling links and return ok; (2) surface row-action errors next to the row (or as a toast) instead of only in the header; (3) label phantom rows (stale-link only) so the action reads 'clean up stale links', not 'remove from core'.
+Fix options: (1) make removeCoreSkill idempotent. A missing core entry should not abort. It should sweep the agent-side dangling links and return ok. (2) surface row-action errors next to the row instead of only in the header. (3) label phantom rows so the action reads 'clean up stale links' instead of 'remove from core'.
 
 ## Plan
 
@@ -21,17 +21,25 @@ Fix options: (1) make removeCoreSkill idempotent — missing core entry should n
 
 ## Summary of Changes
 
-removeCoreSkill is now idempotent: a core entry that is already gone falls through instead of returning the old "core 中不存在该技能" refusal, so the loop below still unlinks every dangling core-pointing link in each tool. Verified in a temp HOME against the real-world shape (no core entry + one dangling link at .gemini/antigravity-cli/skills/wechat-computer-use): result ok:true, unlinked:1, coreEntryMissing:true, link removed. Before the change the same call returned ok:false.
+removeCoreSkill is idempotent. A core entry that is already gone falls through instead of returning a refusal. The loop unlinks every dangling core-pointing link in each tool.
 
-/core row actions now report inline: runRow(fn, key) stores {key,msg} and the message renders under the failing row (per-skill rows and the broken-links list). The header banner was the only sink, and it sits above the fold on a 65-row page - that is why the failure read as "nothing happened".
+/core row actions report errors inline. The error message renders under the failing row.
 
-NOT COMMITTED YET: apps/desktop/src/main/core-skills.ts, preload/api.d.ts and renderer/routes/core.tsx also carry in-progress work from skillsgate-gkjs and skillsgate-q4h9, so the commit needs to be scoped with the user.
+Phantom skill rows are distinguished visually in the desktop UI. SkillFanout tracks a phantom boolean flag populated by groupBySkill when a skill is absent from listCoreEntries. The card renders with an amber border and background. It displays a stale-link only chip. The action button reads Clean up stale links instead of Remove or Remove from Core. Clicking the button immediately invokes removeCoreSkill with detach mode. Unlinked tools for phantom rows show not linked instead of linked.
+
+CLI core list and status command analysis confirmed no phantom row wording problem. The core list command only enumerates listCoreEntries. It never synthesizes phantom rows. The core status command accurately categorizes dangling links as stale links under each tool. The core remove command handles coreEntryMissing.
+
+Added Chinese translations for all new labels in zh-CN.ts.
+
+## Verification
+
+CLI typecheck passed with zero errors.
+CLI test suite passed with 20 out of 20 tests.
+Desktop i18n drift check passed with 0 missing translations.
+Desktop tsconfig.web and tsconfig.node checks passed with zero errors.
+Electron Vite build succeeded.
 
 ## Follow-up
 
-- [ ] Phantom rows (stale links only) should read "clean up stale links" rather than "remove from the core set"; groupBySkill could flag them separately.
-- [ ] Check whether the CLI core list/status has the same phantom-row wording problem.
-
-## Notes
-
-The code for the checked items landed in commit ff56a7b (CLI engine + desktop mirror + the 5-case regression test). Still open: the phantom-row wording, i.e. a stale-link-only skill reads 'remove from the core set' when there is no core entry left and the honest action is 'clean up stale links'; and whether `core list` / `core status` in the CLI have the same wording.
+- [x] Phantom rows (stale links only) should read "clean up stale links" rather than "remove from the core set"; groupBySkill could flag them separately.
+- [x] Check whether the CLI core list/status has the same phantom-row wording problem.

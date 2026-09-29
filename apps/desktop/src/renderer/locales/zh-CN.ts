@@ -223,6 +223,20 @@ export const zhCN: Record<string, string> = {
   "backup & link": "备份并链接",
   "Include this skill in this tool again": "让该技能重新包含进此工具",
   "Remove from the core set and unlink everywhere": "从核心集合移除并在所有工具中解除链接",
+  "Remove core skill": "移除核心技能",
+  "Choose how you want to handle this skill and its underlying files.": "请选择如何处理该技能及其底层文件：",
+  "Remove from Core only (Preserve in library / store)": "仅从 Core 移除（保留在技能库/Store）",
+  "Unlinks from Core and all connected AI tools. The skill files are preserved in your local store or skills library, and can be re-added to Core at any time.":
+    "解除 Core 及所有已连接 AI 工具的软链接。源文件仍安全保留在本地存储或技能库中，未来可随时重新加回 Core。",
+  "Delete completely from disk": "从磁盘所有位置彻底删除",
+  "Permanently deletes this skill from Core, Store, skills library, and all tool directories. This action cannot be undone.":
+    "永久物理删除 Core、Store、技能库以及所有 Agent 工具中的该技能文件，此操作不可撤销。",
+  "Remove from Core": "从 Core 移除",
+  "Clean up stale links": "清理失效链接",
+  "Clean up stale links across all tools": "清理所有工具中的失效链接",
+  "stale-link only": "仅存失效链接",
+  "not linked": "未链接",
+  "Delete permanently": "彻底删除",
   "a real directory already sits at this name": "该名称下已存在真实目录",
   "Fully synced": "已完全同步",
   "Needs sync": "待同步",
@@ -266,4 +280,14 @@ export const zhCN: Record<string, string> = {
 
   // Status messages
   "Save failed": "保存失败",
+
+  // Scan Sources
+  "Discovered Skills": "已发现的技能",
+  "Manage upstream Git skill repositories and local filesystem scan roots.":
+    "管理上游 Git 技能仓库和本地文件系统扫描目录。",
+  Refresh: "刷新",
+  "Track upstream GitHub repositories to browse their skills, receive updates on demand, and link them to Core or local tools.":
+    "跟踪上游 GitHub 仓库以浏览技能，按需接收更新，并将其链接到 Core 或本地工具。",
+  "Updating...": "更新中…",
+  installed: "已安装",
 }

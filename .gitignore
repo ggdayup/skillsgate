@@ -80,7 +80,12 @@ apps/web/*.tsbuildinfo
 .skill-lock.json
 
 # Agent skill directories (installed by skillsgate CLI)
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/verify-skillsgate/
+.agents/skills/verify-skillsgate/artifacts/
+/ggdayup/
 .claude/skills/
 .cursor/skills/
 .windsurf/skills/

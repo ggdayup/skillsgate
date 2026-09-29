@@ -362,6 +362,34 @@ export const agents: Record<string, AgentConfig> = {
       (await commandExists("mercury")),
   },
 
+  qoder: {
+    name: "qoder",
+    displayName: "Qoder",
+    skillsDir: ".qoder/skills",
+    globalSkillsDir: path.join(home, ".qoder", "skills"),
+    detectInstalled: async () =>
+      (await dirExists(path.join(home, ".qoder"))) ||
+      (await commandExists("qoder")) ||
+      (await commandExists("qodercli")) ||
+      (await dirExists("/Applications/Qoder IDE.app")) ||
+      (await dirExists("/Applications/Qoder.app")),
+  },
+
+  "qoder-cn": {
+    name: "qoder-cn",
+    displayName: "Qoder CN",
+    skillsDir: ".qoder-cn/skills",
+    globalSkillsDir: path.join(home, ".qoder-cn", "skills"),
+    detectInstalled: async () =>
+      (await dirExists(path.join(home, ".qoder-cn"))) ||
+      (await commandExists("qoder-cn")) ||
+      (await commandExists("qodercn")) ||
+      (await commandExists("qoderclicn")) ||
+      (await dirExists("/Applications/Qoder CN IDE.app")) ||
+      (await dirExists("/Applications/Qoder CN.app")) ||
+      (await dirExists("/Applications/Qoder IDE CN.app")),
+  },
+
   zed: {
     name: "zed",
     displayName: "Zed",

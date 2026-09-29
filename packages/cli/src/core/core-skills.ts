@@ -10,11 +10,14 @@
 // kept out of `.skill-lock.json`, whose reader wipes itself on a version mismatch).
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import type { Dirent } from "node:fs";
 import {
   AgentConfig,
   AgentType,
   CoreConfig,
+  CoreInstallOptions,
+  CoreInstallOutcome,
   CoreStatusEntry,
   CoreSyncItem,
   CoreSyncPlan,
@@ -23,12 +26,16 @@ import {
 } from "../types.js";
 import {
   BACKUP_DIR,
+  CANONICAL_SKILLS_DIR,
   CORE_CONFIG_PATH,
   CORE_CONFIG_VERSION,
   CORE_SKILLS_DIR,
   SKILL_MD,
+  SKILLS_LIBRARY_DIR,
   STORE_SUBDIR,
 } from "../constants.js";
+
+export type CoreRemoveMode = "detach" | "purge";
 import { agents, detectInstalledAgents } from "./agents.js";
 import {
   isPathSafe,
@@ -36,6 +43,7 @@ import {
   sanitizeName,
   writeSkillFiles,
 } from "./installer.js";
+import { parseSkillMd } from "./skill-discovery.js";
 
 // ---------- low-level fs helpers ----------
 
@@ -551,6 +559,167 @@ export async function getCoreStatus(
 
 // ---------- adding / removing core skills ----------
 
+export type { CoreInstallOptions, CoreInstallOutcome };
+
+export async function installDirToCore(
+  skillDir: string,
+  name: string,
+  opts: CoreInstallOptions = {},
+): Promise<CoreInstallOutcome> {
+  const mode = opts.mode ?? "link";
+  const safeName = sanitizeName(name);
+  const dir = CORE_SKILLS_DIR();
+  const target = path.join(dir, safeName);
+  if (!isPathSafe(target, dir)) {
+    return { ok: false, path: target, error: "路径越界" };
+  }
+
+  try {
+    if (await pathExists(target)) {
+      const lst = await fs.lstat(target);
+      if (mode === "link" && lst.isSymbolicLink()) {
+        const [srcReal, entryReal] = await Promise.all([
+          realpathOrResolve(skillDir),
+          realpathOrResolve(target),
+        ]);
+        if (srcReal === entryReal) {
+          return { ok: true, path: target, already: true };
+        }
+      }
+      if (!opts.replace) {
+        return {
+          ok: false,
+          path: target,
+          conflict: true,
+          error: `core 中已存在 ${safeName}（${lst.isSymbolicLink() ? "软链" : "目录"}）`,
+        };
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const backupPath = path.join(BACKUP_DIR(), `core--${safeName}--${stamp}`);
+      await fs.mkdir(BACKUP_DIR(), { recursive: true });
+      await movePath(target, backupPath);
+    }
+    await fs.mkdir(dir, { recursive: true });
+
+    if (mode === "link") {
+      const srcReal = await realpathOrResolve(skillDir);
+      const type = process.platform === "win32" ? "junction" : undefined;
+      const coreReal = await realpathOrResolve(dir);
+      try {
+        await fs.symlink(path.relative(coreReal, srcReal), target, type);
+      } catch {
+        try {
+          await fs.symlink(srcReal, target, type);
+        } catch {
+          await fs.cp(skillDir, target, { recursive: true, dereference: true });
+        }
+      }
+    } else {
+      await fs.cp(skillDir, target, { recursive: true, dereference: true });
+    }
+    return { ok: true, path: target };
+  } catch (err) {
+    return {
+      ok: false,
+      path: target,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export interface ResolvedLocalSkill {
+  ok: true;
+  skillDir: string;
+  name: string;
+  parsed?: Skill;
+}
+
+export interface LocalSkillError {
+  ok: false;
+  error: string;
+}
+
+export async function resolveLocalSkill(
+  rawPath: string,
+  explicitName?: string,
+): Promise<ResolvedLocalSkill | LocalSkillError> {
+  const expanded =
+    rawPath === "~"
+      ? os.homedir()
+      : rawPath.startsWith("~/") || rawPath.startsWith("~\\")
+        ? path.join(os.homedir(), rawPath.slice(2))
+        : rawPath;
+  const resolved = path.resolve(expanded);
+
+  let stat;
+  try {
+    stat = await fs.stat(resolved);
+  } catch {
+    return { ok: false, error: `Directory not found: ${rawPath}` };
+  }
+
+  let skillDir = resolved;
+  if (stat.isFile()) {
+    if (path.basename(resolved).toLowerCase() === "skill.md") {
+      skillDir = path.dirname(resolved);
+    } else {
+      return { ok: false, error: `${rawPath} is not a directory or SKILL.md file` };
+    }
+  } else if (!stat.isDirectory()) {
+    return { ok: false, error: `${rawPath} is not a directory` };
+  }
+
+  const skillMdPath = path.join(skillDir, SKILL_MD);
+  let mdStat;
+  try {
+    mdStat = await fs.stat(skillMdPath);
+  } catch {
+    return { ok: false, error: `${rawPath} does not contain a SKILL.md file` };
+  }
+  if (!mdStat.isFile()) {
+    return { ok: false, error: `${skillMdPath} is not a file` };
+  }
+
+  const parsed = await parseSkillMd(skillMdPath);
+  const candidateName = explicitName || parsed?.name || path.basename(skillDir);
+  const safeName = sanitizeName(candidateName);
+  if (!safeName) {
+    return { ok: false, error: `Could not determine a valid skill name from ${rawPath}` };
+  }
+
+  return {
+    ok: true,
+    skillDir,
+    name: safeName,
+    parsed: parsed ?? undefined,
+  };
+}
+
+export async function findDanglingCoreEntries(): Promise<
+  { name: string; pointsTo: string }[]
+> {
+  const out: { name: string; pointsTo: string }[] = [];
+  const dir = CORE_SKILLS_DIR();
+  for (const entry of await readdirSafe(dir)) {
+    if (entry.name.startsWith(".") || !entry.isSymbolicLink()) continue;
+    const p = path.join(dir, entry.name);
+    try {
+      await fs.stat(p);
+      continue;
+    } catch {
+      // Symlink points to nonexistent target.
+    }
+    let raw = "";
+    try {
+      raw = await fs.readlink(p);
+    } catch {
+      continue;
+    }
+    out.push({ name: entry.name, pointsTo: path.resolve(path.dirname(p), raw) });
+  }
+  return out;
+}
+
 export async function installSkillToCore(
   skill: Skill,
 ): Promise<{ ok: boolean; path: string; error?: string }> {
@@ -613,7 +782,31 @@ async function unlinkCoreLinkFromAgent(
  * at a skill that survives only as a dangling link in a tool dir, and the sweep
  * below is what clears it.
  */
-export async function removeCoreSkill(name: string): Promise<{
+async function purgeFromSkillsLibrary(safeName: string): Promise<void> {
+  try {
+    const libDir = SKILLS_LIBRARY_DIR();
+    const top = path.join(libDir, safeName);
+    if (await pathExists(top)) {
+      await fs.rm(top, { recursive: true, force: true });
+    }
+    const entries = await readdirSafe(libDir);
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith(".")) {
+        const sub = path.join(libDir, e.name, safeName);
+        if (await pathExists(sub)) {
+          await fs.rm(sub, { recursive: true, force: true });
+        }
+      }
+    }
+  } catch {
+    // Best effort
+  }
+}
+
+export async function removeCoreSkill(
+  name: string,
+  options?: { mode?: CoreRemoveMode },
+): Promise<{
   ok: boolean;
   unlinked: number;
   residualCopies: string[];
@@ -621,6 +814,7 @@ export async function removeCoreSkill(name: string): Promise<{
   coreEntryMissing: boolean;
   error?: string;
 }> {
+  const mode = options?.mode ?? "detach";
   const dir = CORE_SKILLS_DIR();
   const safeName = sanitizeName(name);
   const target = path.join(dir, safeName);
@@ -637,8 +831,18 @@ export async function removeCoreSkill(name: string): Promise<{
   let coreEntryMissing = false;
   try {
     const lst = await fs.lstat(target);
-    if (lst.isSymbolicLink()) await fs.unlink(target);
-    else await fs.rm(target, { recursive: true, force: true });
+    if (lst.isSymbolicLink()) {
+      await fs.unlink(target);
+    } else {
+      if (mode === "detach") {
+        const canonicalTarget = path.join(CANONICAL_SKILLS_DIR(), safeName);
+        if (!(await pathExists(canonicalTarget))) {
+          await fs.mkdir(CANONICAL_SKILLS_DIR(), { recursive: true });
+          await fs.cp(target, canonicalTarget, { recursive: true, dereference: true });
+        }
+      }
+      await fs.rm(target, { recursive: true, force: true });
+    }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {
@@ -651,6 +855,16 @@ export async function removeCoreSkill(name: string): Promise<{
       };
     }
     coreEntryMissing = true;
+  }
+
+  if (mode === "purge") {
+    const canonicalTarget = path.join(CANONICAL_SKILLS_DIR(), safeName);
+    try {
+      await fs.rm(canonicalTarget, { recursive: true, force: true });
+    } catch {
+      // Best effort
+    }
+    await purgeFromSkillsLibrary(safeName);
   }
 
   const detected = await detectInstalledAgents();
@@ -666,7 +880,11 @@ export async function removeCoreSkill(name: string): Promise<{
     try {
       const lst = await fs.lstat(agentPath);
       if (!lst.isSymbolicLink() && lst.isDirectory()) {
-        residualCopies.push(`${agent.displayName}: ${agentPath}`);
+        if (mode === "purge") {
+          await fs.rm(agentPath, { recursive: true, force: true });
+        } else {
+          residualCopies.push(`${agent.displayName}: ${agentPath}`);
+        }
       }
     } catch {
       // nothing there

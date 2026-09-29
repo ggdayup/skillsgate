@@ -15,6 +15,8 @@ import ob1Logo from "../assets/agent-logos/ob-1.svg"
 import openclawLogo from "../assets/agent-logos/openclaw.svg"
 import opencodeLogo from "../assets/agent-logos/opencode.svg"
 import piLogo from "../assets/agent-logos/pi.svg"
+import qoderLogo from "../assets/agent-logos/qoder.svg"
+import qoderCnLogo from "../assets/agent-logos/qoder-cn.svg"
 import traeCnLogo from "../assets/agent-logos/trae-cn.svg"
 import workbuddyLogo from "../assets/agent-logos/workbuddy.svg"
 import workbuddyAiLogo from "../assets/agent-logos/workbuddy-ai.svg"
@@ -44,6 +46,8 @@ const AGENT_LOGOS: Record<string, string> = {
   opencode: opencodeLogo,
   openclaw: openclawLogo,
   pi: piLogo,
+  qoder: qoderLogo,
+  "qoder-cn": qoderCnLogo,
   "trae-cn": traeCnLogo,
   workbuddy: workbuddyLogo,
   "workbuddy-ai": workbuddyAiLogo,
@@ -61,6 +65,8 @@ const AGENT_LOGO_FILTERS: Record<string, string> = {
   mercury: "none",
   "ob-1": "none",
   pi: "none",
+  qoder: "none",
+  "qoder-cn": "none",
   "trae-cn": "none",
   workbuddy: "none",
   "workbuddy-ai": "none",
@@ -92,6 +98,8 @@ export const DISPLAY_NAME_TO_KEY: Record<string, string> = {
   "Pear AI": "pear-ai",
   "Pi Coding Agent": "pi",
   "Roo Code": "roo-code",
+  Qoder: "qoder",
+  "Qoder CN": "qoder-cn",
   Trae: "trae",
   "Trae CN": "trae-cn",
   WorkBuddy: "workbuddy",

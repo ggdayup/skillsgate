@@ -1,4 +1,7 @@
 import { useCallback } from "react"
+import fs from "node:fs/promises"
+import path from "node:path"
+import os from "node:os"
 import { exec as execCb } from "node:child_process"
 import { promisify } from "node:util"
 import { useStore, useDispatch } from "../store/context.js"
@@ -9,6 +12,10 @@ import type { EnrichedSkill, Action } from "../store/types.js"
 import { parseSource } from "../../../cli/src/core/source-parser.js"
 import { cleanupTempDir, fetchTreeSha } from "../../../cli/src/core/git.js"
 import { discoverSkills } from "../../../cli/src/core/skill-discovery.js"
+import {
+  installDirToCore,
+  syncCore,
+} from "../../../cli/src/core/core-skills.js"
 import {
   installSkillForAgent,
   removeSkillFromAgent,
@@ -22,11 +29,88 @@ import {
 import { agents, detectInstalledAgents } from "../../../cli/src/core/agents.js"
 import type { Skill, AgentConfig } from "../../../cli/src/types.js"
 
+export interface InstallLocalPathOptions {
+  targetType?: "core" | "agents"
+  selectedAgents?: string[]
+  mode?: "symlink" | "copy"
+}
+
+export interface InstallLocalPathResult {
+  success: boolean
+  error?: string
+  skillNames?: string[]
+}
+
+export interface PathValidationResult {
+  valid: boolean
+  resolvedPath: string
+  skills: Skill[]
+  error?: string
+}
+
+export async function validateLocalSkillPath(
+  inputPath: string,
+): Promise<PathValidationResult> {
+  const trimmed = inputPath.trim()
+  if (!trimmed) {
+    return { valid: false, resolvedPath: "", skills: [], error: "Path cannot be empty" }
+  }
+
+  let expanded = trimmed
+  if (expanded === "~" || expanded.startsWith("~/")) {
+    expanded = path.join(os.homedir(), expanded.slice(1))
+  }
+  const resolved = path.resolve(expanded)
+
+  try {
+    const stat = await fs.stat(resolved)
+    let dir = resolved
+    if (!stat.isDirectory()) {
+      if (path.basename(resolved).toLowerCase() === "skill.md") {
+        dir = path.dirname(resolved)
+      } else {
+        return { valid: false, resolvedPath: resolved, skills: [], error: "Path is not a directory" }
+      }
+    }
+
+    const skills = await discoverSkills(dir)
+    if (skills.length === 0) {
+      let directExists = false
+      try {
+        await fs.access(path.join(dir, "SKILL.md"))
+        directExists = true
+      } catch {
+        directExists = false
+      }
+      if (!directExists) {
+        return { valid: false, resolvedPath: dir, skills: [], error: "No SKILL.md found in directory" }
+      }
+    }
+
+    return { valid: true, resolvedPath: dir, skills }
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === "ENOENT") {
+      return { valid: false, resolvedPath: resolved, skills: [], error: "Directory does not exist" }
+    }
+    return {
+      valid: false,
+      resolvedPath: resolved,
+      skills: [],
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
 interface UseSkillActionsResult {
   installSkill: (skill: EnrichedSkill) => Promise<void>
   removeSkill: (skill: EnrichedSkill) => Promise<void>
   removeSkillFromOneAgent: (skill: EnrichedSkill, agentName: string) => Promise<void>
   updateSkill: (skill: EnrichedSkill) => Promise<void>
+  installFromLocalPath: (
+    localPath: string,
+    options?: InstallLocalPathOptions,
+  ) => Promise<InstallLocalPathResult>
 }
 
 /**
@@ -312,7 +396,108 @@ export function useSkillActions(): UseSkillActionsResult {
     }
   }, [dispatch, installSkill])
 
-  return { installSkill, removeSkill, removeSkillFromOneAgent, updateSkill }
+  const installFromLocalPath = useCallback(
+    async (
+      localPath: string,
+      options: InstallLocalPathOptions = {},
+    ): Promise<InstallLocalPathResult> => {
+      const validation = await validateLocalSkillPath(localPath)
+      if (!validation.valid || validation.skills.length === 0) {
+        const error = validation.error ?? "Invalid skill path"
+        dispatch({
+          type: "SHOW_NOTIFICATION",
+          notification: { type: "error", message: `Install failed: ${error}` },
+        })
+        return { success: false, error }
+      }
+
+      const targetType = options.targetType ?? "core"
+      const mode = options.mode ?? "symlink"
+      const skills = validation.skills
+      const resolvedDir = validation.resolvedPath
+
+      try {
+        if (targetType === "core") {
+          for (const skill of skills) {
+            const skillDir = skill.filePath ? path.dirname(skill.filePath) : resolvedDir
+            const res = await installDirToCore(skillDir, skill.name, {
+              mode: mode === "copy" ? "copy" : "link",
+              replace: true,
+            })
+            if (!res.ok) {
+              const err = res.error ?? `Failed to install "${skill.name}" to core`
+              dispatch({
+                type: "SHOW_NOTIFICATION",
+                notification: { type: "error", message: `Core install failed: ${err}` },
+              })
+              return { success: false, error: err }
+            }
+            await addSkillToLock(sanitizeName(skill.name), {
+              source: resolvedDir,
+              sourceType: "local",
+              originalUrl: resolvedDir,
+              skillFolderHash: "",
+            })
+          }
+          await syncCore()
+        } else {
+          const installedAgents = await detectInstalledAgents()
+          const preferredAgents = options.selectedAgents && options.selectedAgents.length > 0
+            ? installedAgents.filter((a) => options.selectedAgents!.includes(a.name))
+            : installedAgents
+
+          if (preferredAgents.length === 0) {
+            const err = "No target agents selected or detected"
+            dispatch({
+              type: "SHOW_NOTIFICATION",
+              notification: { type: "error", message: err },
+            })
+            return { success: false, error: err }
+          }
+
+          for (const skill of skills) {
+            for (const agent of preferredAgents) {
+              await installSkillForAgent(skill, agent, "global", mode)
+            }
+            await addSkillToLock(sanitizeName(skill.name), {
+              source: resolvedDir,
+              sourceType: "local",
+              originalUrl: resolvedDir,
+              skillFolderHash: "",
+            })
+          }
+        }
+
+        dispatch({ type: "REFRESH_SKILLS" })
+        const names = skills.map((s) => s.name)
+        const summary = names.join(", ")
+        dispatch({
+          type: "SHOW_NOTIFICATION",
+          notification: {
+            type: "success",
+            message: `Installed ${names.length} skill(s): ${summary} (${targetType})`,
+          },
+        })
+        return { success: true, skillNames: names }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        dispatch({
+          type: "SHOW_NOTIFICATION",
+          notification: { type: "error", message: `Install failed: ${msg}` },
+        })
+        return { success: false, error: msg }
+      }
+    },
+    [dispatch],
+  )
+
+  return {
+    installSkill,
+    removeSkill,
+    removeSkillFromOneAgent,
+    updateSkill,
+    installFromLocalPath,
+  }
 }
 
 // ---------- Helpers ----------

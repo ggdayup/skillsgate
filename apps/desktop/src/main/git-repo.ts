@@ -88,7 +88,7 @@ export function sanitizeName(name: string): string {
 }
 
 export function extractGitErrorMessage(
-  err: (Error & { killed?: boolean; signal?: NodeJS.Signals | string; code?: string | number }) | null,
+  err: (Error & { killed?: boolean; signal?: NodeJS.Signals | string; code?: string | number | null }) | null,
   stderr: string,
   stdout = "",
 ): string {

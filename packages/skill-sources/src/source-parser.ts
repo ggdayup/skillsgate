@@ -46,6 +46,9 @@ export function parseSource(source: string): ParsedSource {
 function parseGitHubUrl(input: string): ParsedSource | null {
   let url = input;
   if (url.startsWith("github.com/")) url = `https://${url}`;
+  else if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\/(?:tree|blob)\//.test(url)) {
+    url = `https://github.com/${url}`;
+  }
   if (!url.startsWith("https://github.com/")) return null;
 
   try {
@@ -54,14 +57,25 @@ function parseGitHubUrl(input: string): ParsedSource | null {
     if (parts.length < 2) return null;
 
     const owner = parts[0];
-    const repo = parts[1];
+    const repo = parts[1].replace(/\.git$/, "");
     let subpath: string | undefined;
     let ref: string | undefined;
 
-    if (parts[2] === "tree" && parts.length >= 4) {
+    if ((parts[2] === "tree" || parts[2] === "blob") && parts.length >= 4) {
       ref = parts[3];
       if (parts.length > 4) {
-        subpath = parts.slice(4).join("/");
+        const subpathParts = parts.slice(4);
+        const lastPart = subpathParts[subpathParts.length - 1];
+        if (
+          lastPart &&
+          (lastPart.toLowerCase() === "skill.md" ||
+            lastPart.toLowerCase().endsWith(".md"))
+        ) {
+          subpathParts.pop();
+        }
+        if (subpathParts.length > 0) {
+          subpath = subpathParts.join("/");
+        }
       }
     }
 

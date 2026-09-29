@@ -57,13 +57,15 @@ npm install -g skillsgate
 
 ## Supported Agents
 
-Antigravity, **Antigravity IDE**, **Antigravity CLI**, Claude Code, Cline, CodeArts Doer, CodeBuddy, CodeBuddy CN, Codex CLI, Continue, Cursor, Droid CLI, **Gemini CLI**, GitHub Copilot, Goose, Junie, Kilo Code, Mercury Agent, OB-1, Amp, OpenClaw, OpenCode, Pear AI, Pi Coding Agent, Roo Code, Trae, Trae CN, Windsurf, WorkBuddy, WorkBuddy AI, and Zed.
+Antigravity, **Antigravity IDE**, **Antigravity CLI**, Claude Code, Cline, CodeArts Doer, CodeBuddy, CodeBuddy CN, Codex CLI, Continue, Cursor, Droid CLI, **Gemini CLI**, GitHub Copilot, Goose, Junie, Kilo Code, Mercury Agent, OB-1, Amp, OpenClaw, OpenCode, Pear AI, Pi Coding Agent, **Qoder**, **Qoder CN**, Roo Code, Trae, Trae CN, Windsurf, WorkBuddy, WorkBuddy AI, and Zed.
 
 > Google ships three Antigravity interfaces (the 2.0 app, the IDE, and the `agy` CLI). Each keeps its own skills directory under `~/.gemini/`, so SkillsGate manages them as three separate tools.
 
 > **Gemini CLI** is a *different* Google product that also lives under `~/.gemini`. Its global skills live in `~/.gemini/skills`, whereas Antigravity reads `~/.gemini/config/skills` — so the two are tracked as separate tools rather than sharing a directory.
 
 > **CodeArts Doer** (`codearts`) is built on OpenCode but keeps its own config root: `PLUGIN_ENV=hc` makes it read `~/.codeartsdoer/skills` rather than OpenCode's directory, so the two are tracked separately. Its bundled skills under `~/.codeartsdoer/cli-data/system/skills` are left untouched.
+
+> **Qoder** and **Qoder CN** represent Alibaba's global and domestic editions. They resolve user skills independently at `~/.qoder/skills` and `~/.qoder-cn/skills`.
 
 ## Features
 

@@ -7,6 +7,7 @@ import { useStore, useDispatch } from "../store/context.js"
 import { useDb } from "../db/context.js"
 import { agents } from "../../../cli/src/core/agents.js"
 import { readSkillLock } from "../../../cli/src/core/skill-lock.js"
+import { parseFrontmatterFallback } from "../../../cli/src/core/source-parser.js"
 import { SKILL_MD } from "../../../cli/src/constants.js"
 import { loadCachedSkills, saveCachedSkills, type CachedSkill } from "../db/skills-cache.js"
 import type { EnrichedSkill } from "../store/types.js"
@@ -243,8 +244,20 @@ async function fullScan(
         const skillDirPath = path.join(skillsDir, entry.name)
         const skillMdPath = path.join(skillDirPath, SKILL_MD)
         try {
-          const raw = await fs.readFile(skillMdPath, "utf-8")
-          const { data: frontmatter } = matter(raw)
+          let frontmatter: any
+          try {
+            frontmatter = matter(raw).data
+          } catch {
+            frontmatter = parseFrontmatterFallback(raw)
+          }
+          if (
+            !frontmatter ||
+            typeof frontmatter.name !== "string" ||
+            typeof frontmatter.description !== "string"
+          ) {
+            const fallback = parseFrontmatterFallback(raw)
+            if (fallback) frontmatter = { ...frontmatter, ...fallback }
+          }
           const skillName = entry.name
           const canonicalPath = await fs.realpath(skillDirPath).catch(() => skillDirPath)
           const scope = getScopeForPath(canonicalPath)
@@ -309,7 +322,20 @@ async function collectCustomSkills(
     const skillMdPath = path.join(skillDir, SKILL_MD)
     try {
       const raw = await fs.readFile(skillMdPath, "utf-8")
-      const { data: frontmatter } = matter(raw)
+      let frontmatter: any
+      try {
+        frontmatter = matter(raw).data
+      } catch {
+        frontmatter = parseFrontmatterFallback(raw)
+      }
+      if (
+        !frontmatter ||
+        typeof frontmatter.name !== "string" ||
+        typeof frontmatter.description !== "string"
+      ) {
+        const fallback = parseFrontmatterFallback(raw)
+        if (fallback) frontmatter = { ...frontmatter, ...fallback }
+      }
       const canonicalPath = await fs.realpath(skillDir).catch(() => skillDir)
       const folderName = path.basename(skillDir)
       const supportingFiles = await listSupportingFiles(canonicalPath)

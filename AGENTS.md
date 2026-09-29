@@ -11,8 +11,8 @@ SkillsGate is a visual AI skill manager for coding agents across Desktop (Electr
 
 ---
 
-## 2. Supported Coding Agent Harnesses (31 Agents)
-SkillsGate provides unified skill discovery and synchronization across 31 agent targets.
+## 2. Supported Coding Agent Harnesses (33 Agents)
+SkillsGate provides unified skill discovery and synchronization across 33 agent targets.
 
 > **Core is not an agent.** `~/.agents/skills` is the shared core skill set that fans out into these tools — see §3. It appears in listings so core skills stay visible, but it is a *source*, never an install target.
 
@@ -47,6 +47,15 @@ SkillsGate provides unified skill discovery and synchronization across 31 agent 
 29. **Pi Coding Agent** (`pi`, `PI`, `.pi/skills`, `~/.pi/agent/skills`)
 30. **Mercury Agent** (`mercury`, `MC`, `.mercury/skills`, `~/.mercury/skills`)
 31. **CodeArts Doer** (`codeartsdoer`, `CDR`, `.codeartsdoer/skills`, `~/.codeartsdoer/skills`)
+32. **Qoder** (`qoder`, `QD`, `.qoder/skills`, `~/.qoder/skills`)
+33. **Qoder CN** (`qoder-cn`, `QCN`, `.qoder-cn/skills`, `~/.qoder-cn/skills`)
+
+#### Qoder and Qoder CN are two distinct editions with separate directories
+Alibaba's Qoder coding assistant ships in global (`Qoder`) and China (`Qoder CN`) editions, both offering IDE and CLI interfaces (`qoder` / `qodercli` vs `qoder-cn` / `qodercn` / `qoderclicn`).
+Each reads from its own distinct skills root:
+- **Qoder**: `~/.qoder/skills` (project: `.qoder/skills`)
+- **Qoder CN**: `~/.qoder-cn/skills` (project: `.qoder-cn/skills`)
+Both are tracked and detected as independent targets with dedicated brand assets and badges.
 
 #### CodeArts Doer is an opencode bundle, but not the OpenCode tool
 Huawei's `codearts` CLI (`~/.codeartsdoer/installers/codearts`) wraps opencode — its

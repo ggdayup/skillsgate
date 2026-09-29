@@ -11,6 +11,7 @@ const SHORTCUTS_LEFT: ShortcutEntry[] = [
   { key: "G", description: "Jump to last item" },
   { key: "v", description: "View skill detail" },
   { key: "f", description: "Toggle favorite on selected skill" },
+  { key: "a", description: "Add skill from local path" },
   { key: "n", description: "Create local skill (home)" },
   { key: "c", description: "Manage collections (home)" },
   { key: "/", description: "Focus search input" },

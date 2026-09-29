@@ -18,9 +18,11 @@ describe("agents registry", () => {
     "trae-cn",
     "pi",
     "mercury",
+    "qoder",
+    "qoder-cn",
   ];
 
-  it("should have all 11 new agents registered", () => {
+  it("should have all 13 new agents registered", () => {
     for (const agentName of expectedNewAgents) {
       assert.ok(
         agents[agentName],
@@ -51,9 +53,23 @@ describe("agents registry", () => {
     }
   });
 
-  it("should register 31 total coding agents", () => {
+  it("should register 33 total coding agents", () => {
     const keys = Object.keys(agents);
-    assert.equal(keys.length, 31, `Expected 31 agents registered, found ${keys.length}`);
+    assert.equal(keys.length, 33, `Expected 33 agents registered, found ${keys.length}`);
+  });
+
+  it("should keep Qoder and Qoder CN distinct with separate skills dirs", async () => {
+    assert.ok(agents.qoder, "qoder should be present in agents registry");
+    assert.ok(agents["qoder-cn"], "qoder-cn should be present in agents registry");
+    assert.equal(agents.qoder.globalSkillsDir, path.join(os.homedir(), ".qoder", "skills"));
+    assert.equal(agents["qoder-cn"].globalSkillsDir, path.join(os.homedir(), ".qoder-cn", "skills"));
+    assert.notEqual(
+      agents.qoder.globalSkillsDir,
+      agents["qoder-cn"].globalSkillsDir,
+      "qoder and qoder-cn must not share skills dir",
+    );
+    assert.equal(typeof (await agents.qoder.detectInstalled()), "boolean");
+    assert.equal(typeof (await agents["qoder-cn"].detectInstalled()), "boolean");
   });
 
   it("should keep CodeArts Doer out of OpenCode's skills dirs", async () => {

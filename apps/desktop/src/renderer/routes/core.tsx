@@ -57,6 +57,7 @@ interface SkillFanout {
   excluded: string[]
   /** action keyed by tool id */
   byAgent: Record<string, Action>
+  phantom?: boolean
 }
 
 function groupBySkill(items: CoreSyncItem[], coreNames: string[]): SkillFanout[] {
@@ -70,6 +71,7 @@ function groupBySkill(items: CoreSyncItem[], coreNames: string[]): SkillFanout[]
       conflicts: [],
       excluded: [],
       byAgent: {},
+      phantom: false,
     })
   }
   for (const item of items) {
@@ -83,6 +85,7 @@ function groupBySkill(items: CoreSyncItem[], coreNames: string[]): SkillFanout[]
         conflicts: [],
         excluded: [],
         byAgent: {},
+        phantom: true,
       }
       map.set(item.skill, entry)
     }
@@ -150,6 +153,113 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
   )
 }
 
+interface RemoveCoreSkillDialogProps {
+  skillName: string
+  busy: boolean
+  onClose: () => void
+  onConfirm: (mode: "detach" | "purge") => Promise<void>
+}
+
+function RemoveCoreSkillDialog({
+  skillName,
+  busy,
+  onClose,
+  onConfirm,
+}: RemoveCoreSkillDialogProps) {
+  const [mode, setMode] = useState<"detach" | "purge">("detach")
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-border bg-surface p-6 shadow-2xl">
+        <h3 className="text-lg font-bold text-foreground mb-1">
+          {t("Remove core skill")}
+        </h3>
+        <p className="text-[12px] text-muted mb-4">
+          <span className="font-semibold text-foreground mr-1.5">{skillName}.</span>
+          <span>{t("Choose how you want to handle this skill and its underlying files.")}</span>
+        </p>
+
+        <div className="space-y-2.5 text-[12px] text-foreground mb-5">
+          <label
+            className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+              mode === "detach"
+                ? "border-primary bg-primary/5"
+                : "border-border bg-background hover:border-foreground/30"
+            }`}
+          >
+            <input
+              type="radio"
+              name="coreRemoveMode"
+              checked={mode === "detach"}
+              onChange={() => setMode("detach")}
+              className="mt-0.5 accent-primary"
+            />
+            <div>
+              <span className="font-semibold block text-foreground">
+                {t("Remove from Core only (Preserve in library / store)")}
+              </span>
+              <span className="text-[11px] text-muted block mt-0.5">
+                {t(
+                  "Unlinks from Core and all connected AI tools. The skill files are preserved in your local store or skills library, and can be re-added to Core at any time.",
+                )}
+              </span>
+            </div>
+          </label>
+
+          <label
+            className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+              mode === "purge"
+                ? "border-red-500 bg-red-500/5"
+                : "border-border bg-background hover:border-foreground/30"
+            }`}
+          >
+            <input
+              type="radio"
+              name="coreRemoveMode"
+              checked={mode === "purge"}
+              onChange={() => setMode("purge")}
+              className="mt-0.5 accent-red-600"
+            />
+            <div>
+              <span className="font-semibold block text-red-600">
+                {t("Delete completely from disk")}
+              </span>
+              <span className="text-[11px] text-muted block mt-0.5">
+                {t(
+                  "Permanently deletes this skill from Core, Store, skills library, and all tool directories. This action cannot be undone.",
+                )}
+              </span>
+            </div>
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-3 border-t border-border">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-lg border border-border bg-background px-4 py-2 text-[12px] font-medium text-foreground hover:bg-surface disabled:opacity-40"
+          >
+            {t("Cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfirm(mode)}
+            disabled={busy}
+            className={`rounded-lg px-4 py-2 text-[12px] font-medium text-white transition-colors disabled:opacity-40 ${
+              mode === "purge"
+                ? "bg-red-600 hover:bg-red-700"
+                : "bg-primary hover:bg-primary/90"
+            }`}
+          >
+            {mode === "purge" ? t("Delete permanently") : t("Remove from Core")}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Core() {
   const [list, setList] = useState<CoreListResult | null>(null)
   const [status, setStatus] = useState<CoreStatusEntry[]>([])
@@ -163,9 +273,8 @@ export function Core() {
   const [openTool, setOpenTool] = useState<string | null>(null)
   const [openSkill, setOpenSkill] = useState<string | null>(null)
   const [query, setQuery] = useState("")
-  // Both of these delete or relocate real directories, so they arm first and
-  // act on a second, distinct click. Keyed so only one row is ever armed.
-  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  // Modal target for core skill removal (detach vs purge)
+  const [removeTargetSkill, setRemoveTargetSkill] = useState<string | null>(null)
   const [confirmReplace, setConfirmReplace] = useState<string | null>(null)
   // Row actions happen far below the header card, so their failure has to be
   // rendered next to the row — a header-only banner reads as "nothing happened".
@@ -330,7 +439,7 @@ export function Core() {
                   <button
                     onClick={() =>
                       void runRow(
-                        () => electronAPI.coreRemove(d.name),
+                        () => electronAPI.coreRemove(d.name, "detach"),
                         `dangling:${d.name}`,
                       )
                     }
@@ -615,7 +724,11 @@ export function Core() {
                 return (
                   <div
                     key={skill.name}
-                    className="rounded-xl border border-border bg-background"
+                    className={`rounded-xl border ${
+                      skill.phantom
+                        ? "border-amber-600/30 bg-amber-600/5"
+                        : "border-border bg-background"
+                    }`}
                   >
                     <div className="flex items-center gap-3 px-4 py-3">
                       <button
@@ -631,46 +744,43 @@ export function Core() {
                         >
                           {skill.linked}/{total}
                         </span>
-                        {skill.pending > 0 && (
-                          <Chip tone="warn">{skill.pending} {t("pending")}</Chip>
-                        )}
-                        {skill.stale > 0 && (
-                          <Chip tone="warn">{skill.stale} {t("stale")}</Chip>
-                        )}
-                        {skill.conflicts.length > 0 && (
-                          <Chip tone="bad">{skill.conflicts.length} {t("conflict")}</Chip>
-                        )}
-                        {skill.excluded.length > 0 && (
-                          <Chip tone="info">{skill.excluded.length} {t("excluded")}</Chip>
+                        {skill.phantom ? (
+                          <Chip tone="warn">{t("stale-link only")}</Chip>
+                        ) : (
+                          <>
+                            {skill.pending > 0 && (
+                              <Chip tone="warn">{skill.pending} {t("pending")}</Chip>
+                            )}
+                            {skill.stale > 0 && (
+                              <Chip tone="warn">{skill.stale} {t("stale")}</Chip>
+                            )}
+                            {skill.conflicts.length > 0 && (
+                              <Chip tone="bad">{skill.conflicts.length} {t("conflict")}</Chip>
+                            )}
+                            {skill.excluded.length > 0 && (
+                              <Chip tone="info">{skill.excluded.length} {t("excluded")}</Chip>
+                            )}
+                          </>
                         )}
                       </button>
-                      {confirmRemove === skill.name ? (
-                        <span className="flex items-center gap-1 flex-shrink-0">
-                          <button
-                            disabled={busy !== null}
-                            onClick={() => {
-                              setConfirmRemove(null)
-                              void runRow(
-                                () => electronAPI.coreRemove(skill.name),
-                                `skill:${skill.name}`,
-                              )
-                            }}
-                            className="rounded-md border border-red-500 bg-red-500 px-2 py-1 text-[11px] text-white disabled:opacity-40"
-                            title={t("Remove from the core set and unlink everywhere")}
-                          >
-                            {t("Confirm")}
-                          </button>
-                          <button
-                            onClick={() => setConfirmRemove(null)}
-                            className="rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:text-foreground"
-                          >
-                            {t("Cancel")}
-                          </button>
-                        </span>
+                      {skill.phantom ? (
+                        <button
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void runRow(
+                              () => electronAPI.coreRemove(skill.name, "detach"),
+                              `skill:${skill.name}`,
+                            )
+                          }
+                          className="rounded-md border border-amber-300 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20 disabled:opacity-40"
+                          title={t("Clean up stale links across all tools")}
+                        >
+                          {t("Clean up stale links")}
+                        </button>
                       ) : (
                         <button
                           disabled={busy !== null}
-                          onClick={() => setConfirmRemove(skill.name)}
+                          onClick={() => setRemoveTargetSkill(skill.name)}
                           className="rounded-md border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-40 hover:text-red-600 hover:border-red-200"
                           title={t("Remove from the core set and unlink everywhere")}
                         >
@@ -689,7 +799,6 @@ export function Core() {
                       <div className="px-4 pb-4 flex flex-col gap-2">
                         {status.map((entry) => {
                           const action = skill.byAgent[entry.agent]
-                          const linked = action === "skip-present"
                           const excluded = action === "skip-excluded"
                           return (
                             <div
@@ -709,25 +818,29 @@ export function Core() {
                                       ? t("stale")
                                       : excluded
                                         ? t("excluded")
-                                        : t("linked")}
+                                        : action === "skip-present"
+                                          ? t("linked")
+                                          : t("not linked")}
                               </span>
-                              <button
-                                disabled={busy !== null}
-                                onClick={() =>
-                                  void runRow(
-                                    () =>
-                                      electronAPI.coreSetExclusion(
-                                        entry.agent,
-                                        skill.name,
-                                        !excluded,
-                                      ),
-                                    `skill:${skill.name}`,
-                                  )
-                                }
-                                className="rounded-md border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-40 hover:text-foreground hover:bg-surface-hover"
-                              >
-                                {excluded ? t("include") : t("exclude")}
-                              </button>
+                              {!skill.phantom && (
+                                <button
+                                  disabled={busy !== null}
+                                  onClick={() =>
+                                    void runRow(
+                                      () =>
+                                        electronAPI.coreSetExclusion(
+                                          entry.agent,
+                                          skill.name,
+                                          !excluded,
+                                        ),
+                                      `skill:${skill.name}`,
+                                    )
+                                  }
+                                  className="rounded-md border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-40 hover:text-foreground hover:bg-surface-hover"
+                                >
+                                  {excluded ? t("include") : t("exclude")}
+                                </button>
+                              )}
                             </div>
                           )
                         })}
@@ -740,6 +853,22 @@ export function Core() {
           </div>
         </div>
       </div>
+
+      {removeTargetSkill && (
+        <RemoveCoreSkillDialog
+          skillName={removeTargetSkill}
+          busy={busy !== null}
+          onClose={() => setRemoveTargetSkill(null)}
+          onConfirm={async (mode) => {
+            const skillName = removeTargetSkill
+            setRemoveTargetSkill(null)
+            await runRow(
+              () => electronAPI.coreRemove(skillName, mode),
+              `skill:${skillName}`,
+            )
+          }}
+        />
+      )}
     </div>
   )
 }

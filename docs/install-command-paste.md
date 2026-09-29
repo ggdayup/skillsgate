@@ -145,13 +145,10 @@ These are real and some are load-bearing; the plan in §7 is ordered around them
 - [x] Resolve failures surface main's message verbatim, including
       `No skill named X in this source. Available: …`.
 
-**Deviation:** the chip is **not** emitted via `formatInstallCommand()`. The
-renderer cannot import the shared barrel — `source-parser.ts` pulls in
-`node:path`/`node:os`, which the browser bundle has no shim for, and that is also
-why parsing runs in main. Fixing it properly means splitting the package so the
-pure grammar (tokenizer, `formatInstallCommand`, `unsupportedSourceReason`) is a
-browser-safe subpath. Left as a follow-up; the format is trivial and is currently
-inlined in `CommandChip`.
+**Resolved:** the chip is emitted via `formatInstallCommand()` imported from
+`@skillsgate/skill-sources/format`. This isolated subpath has zero Node dependencies,
+preventing `node:path`/`node:os` from being pulled into the renderer bundle while
+sharing the serializer across parser and UI.
 
 ### Stage 4 — docs
 

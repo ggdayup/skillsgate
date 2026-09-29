@@ -8,6 +8,7 @@ import { useDb } from "../db/context.js"
 import { AgentFilter } from "../components/agent-filter.js"
 import { SkillList } from "../components/skill-list.js"
 import { colors, agentBadges as badgeMap } from "../utils/colors.js"
+import { AddLocalSkillOverlay } from "../components/add-local-skill-overlay.js"
 import type { EnrichedSkill } from "../store/types.js"
 import { agents } from "../../../cli/src/core/agents.js"
 import { addSkillToLock } from "../../../cli/src/core/skill-lock.js"
@@ -57,6 +58,7 @@ export function HomeView() {
   const [collectionsVersion, setCollectionsVersion] = useState(0)
   const [showCollections, setShowCollections] = useState(false)
   const [showCreateSkill, setShowCreateSkill] = useState(false)
+  const [showAddLocalSkill, setShowAddLocalSkill] = useState(false)
 
   // Apply agent filter and text filter
   const collections = settings.get<Record<string, string[]>>("collections.skills", {})
@@ -102,7 +104,7 @@ export function HomeView() {
     if (state.activeView !== "home") return
     if (state.showHelp) return
     if (state.focusedPane === "search") return
-    if (showCollections || showCreateSkill) return
+    if (showCollections || showCreateSkill || showAddLocalSkill) return
 
     if (key.name === "c") {
       setShowCollections(true)
@@ -111,6 +113,11 @@ export function HomeView() {
 
     if (key.name === "n") {
       setShowCreateSkill(true)
+      return
+    }
+
+    if (key.name === "a") {
+      setShowAddLocalSkill(true)
       return
     }
   })
@@ -241,6 +248,14 @@ Add your skill instructions here.
             await createLocalSkill(data)
             setShowCreateSkill(false)
           }}
+        />
+      ) : null}
+
+      {showAddLocalSkill ? (
+        <AddLocalSkillOverlay
+          agents={state.detectedAgents}
+          defaultTargets={settings.get<string[]>("install.defaultAgents", [])}
+          onClose={() => setShowAddLocalSkill(false)}
         />
       ) : null}
     </box>

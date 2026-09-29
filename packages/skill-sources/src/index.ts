@@ -23,6 +23,13 @@ export {
   SourceParseError,
 } from "./source-parser";
 
+// Frontmatter parsing
+export {
+  parseFrontmatterFallback,
+  parseSkillFrontmatter,
+  type SkillFrontmatter,
+} from "./frontmatter";
+
 // Install-command parsing (the pasted `npx skills add …` form)
 export {
   parseInstallCommand,

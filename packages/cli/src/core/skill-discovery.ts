@@ -8,6 +8,7 @@ import {
   getPluginSkillPaths,
   getPluginGroupings,
 } from "./plugin-manifest.js";
+import { parseSkillFrontmatter } from "@skillsgate/skill-sources";
 
 // ---------- Priority search directories ----------
 // Matches upstream vercel-labs/skills exactly
@@ -45,6 +46,7 @@ const PRIORITY_SEARCH_SUFFIXES = [
   ".pi/skills",
   ".mercury/skills",
   ".qoder/skills",
+  ".qoder-cn/skills",
   ".roo/skills",
   ".trae/skills",
   ".trae-cn/skills",
@@ -72,14 +74,8 @@ async function hasSkillMd(dir: string): Promise<boolean> {
 export async function parseSkillMd(filePath: string): Promise<Skill | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const { data: frontmatter } = matter(raw);
-
-    if (
-      typeof frontmatter.name !== "string" ||
-      typeof frontmatter.description !== "string"
-    ) {
-      return null;
-    }
+    const frontmatter = parseSkillFrontmatter(raw, matter);
+    if (!frontmatter) return null;
 
     return {
       name: frontmatter.name,

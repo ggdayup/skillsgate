@@ -1,13 +1,17 @@
 import { useState, useEffect, useMemo } from "react"
 import { useKeyboard } from "@opentui/react"
 import { useStore, useDispatch } from "../store/context.js"
+import { useDb } from "../db/context.js"
 import { useSearch } from "../data/use-search.js"
 import { useTrending } from "../data/use-trending.js"
 import { useSkillActions } from "../data/use-skill-actions.js"
 import { ConfirmDialog } from "../components/confirm-dialog.js"
+import { AddLocalSkillOverlay } from "../components/add-local-skill-overlay.js"
 import type { CatalogSkill, SkillsShSkill } from "../data/api-client.js"
 import { filterSkills } from "../data/api-client.js"
 import { colors } from "../utils/colors.js"
+
+const LOCAL_PATH_HINT = /^\s*(?:~\/\S|\/\S|\.\/\S|\.\.\/\S|[A-Za-z]:[\\/]\S|~(?:\s|$))/
 
 // Sentinel selection index for the focusable "Official only" toggle row that
 // sits above the skill rows in the list pane.
@@ -21,11 +25,14 @@ const TOGGLE_INDEX = -1
 export function DiscoverView() {
   const state = useStore()
   const dispatch = useDispatch()
+  const { settings } = useDb()
   const [query, setQuery] = useState("")
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [officialOnly, setOfficialOnly] = useState(false)
   const [installTarget, setInstallTarget] = useState<CatalogSkill | null>(null)
   const [previewSkill, setPreviewSkill] = useState<SkillsShSkill | null>(null)
+  const [showAddLocalSkill, setShowAddLocalSkill] = useState(false)
+  const [localPathInitial, setLocalPathInitial] = useState("")
 
   // Auto-focus search input when Discover view mounts
   useEffect(() => {
@@ -82,6 +89,7 @@ export function DiscoverView() {
   useKeyboard((key) => {
     if (state.activeView !== "discover") return
     if (state.showHelp) return
+    if (showAddLocalSkill) return
     if (state.focusedPane === "search") return
     if (installTarget) return
 
@@ -132,6 +140,13 @@ export function DiscoverView() {
       setInstallTarget(visibleSkills[selectedIndex])
       return
     }
+
+    // a to add from local path
+    if (key.name === "a") {
+      setLocalPathInitial("")
+      setShowAddLocalSkill(true)
+      return
+    }
   })
 
   // Confirm dialog for install
@@ -167,8 +182,14 @@ export function DiscoverView() {
         {state.focusedPane === "search" ? (
           <input
             placeholder="Search skills... (Enter to search)"
-            focused={state.activeView === "discover" && !state.showHelp}
+            focused={state.activeView === "discover" && !state.showHelp && !showAddLocalSkill}
             onSubmit={((value: string) => {
+              if (LOCAL_PATH_HINT.test(value)) {
+                setLocalPathInitial(value.trim())
+                setShowAddLocalSkill(true)
+                dispatch({ type: "SET_FOCUSED_PANE", pane: "list" })
+                return
+              }
               setQuery(value)
               setSelectedIndex(0)
             }) as any}
@@ -303,6 +324,18 @@ export function DiscoverView() {
           )}
         </box>
       </box>
+
+      {showAddLocalSkill ? (
+        <AddLocalSkillOverlay
+          initialPath={localPathInitial}
+          agents={state.detectedAgents}
+          defaultTargets={settings.get<string[]>("install.defaultAgents", [])}
+          onClose={() => {
+            setShowAddLocalSkill(false)
+            setLocalPathInitial("")
+          }}
+        />
+      ) : null}
     </box>
   )
 }

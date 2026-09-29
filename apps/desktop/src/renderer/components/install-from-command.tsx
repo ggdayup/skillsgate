@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { t } from "../lib/i18n"
 import { electronAPI } from "../lib/electron-api"
+import { formatInstallCommand } from "@skillsgate/skill-sources/format"
 
 /**
  * Preview + install panel for a pasted `npx skills add …` command.
@@ -80,7 +81,11 @@ export function InstallFromCommand({
         setSelected(
           new Set(
             next.skills
-              .filter((skill) => named.has(skill.name.toLowerCase()))
+              .filter((skill) =>
+                named.size > 0
+                  ? named.has(skill.name.toLowerCase())
+                  : next.skills.length === 1,
+              )
               .map((skill) => skill.name),
           ),
         )
@@ -133,9 +138,11 @@ export function InstallFromCommand({
     setConflicts(null)
     const names = [...selected]
 
+    const targetSource = preview.installSource || preview.label
+
     try {
       if (useCore) {
-        const out = await electronAPI.coreInstall(preview.label, names, {
+        const out = await electronAPI.coreInstall(targetSource, names, {
           mode: linkMode ? "link" : "copy",
           replace,
         })
@@ -152,7 +159,7 @@ export function InstallFromCommand({
         }
       } else {
         const out = await electronAPI.installSkill(
-          preview.label,
+          targetSource,
           selectedAgents,
           "global",
           names,
@@ -455,9 +462,15 @@ function CheckGlyph() {
  * Discover search box to install. Lives in this module so both halves of the
  * feature stay together.
  */
-export function CommandChip({ source }: { source: string }) {
+export function CommandChip({
+  source,
+  skillName,
+}: {
+  source: string
+  skillName?: string
+}) {
   const [copied, setCopied] = useState(false)
-  const command = `npx skills add ${source}`
+  const command = formatInstallCommand(source, skillName)
 
   async function copy() {
     try {

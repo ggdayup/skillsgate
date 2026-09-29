@@ -190,6 +190,8 @@ declare global {
     sourceType?: "github" | "local"
     /** `owner/repo` for GitHub sources, or the absolute path for local ones. */
     label: string
+    /** Precise source specifier used for installation (includes subpath/ref for scoped GitHub repos). */
+    installSource?: string
     skills: { name: string; description: string }[]
     /** Skill names the command asked for. Empty means "everything found". */
     requestedSkills: string[]
@@ -320,7 +322,10 @@ declare global {
     corePlan: () => Promise<CoreSyncPlan>
     coreSync: () => Promise<{ plan: CoreSyncPlan; result: CoreSyncResult }>
     corePromote: (skillName: string, agentName: string) => Promise<{ ok: boolean; path: string }>
-    coreRemove: (skillName: string) => Promise<{
+    coreRemove: (
+      skillName: string,
+      mode?: "detach" | "purge",
+    ) => Promise<{
       ok: boolean
       unlinked: number
       residualCopies: string[]

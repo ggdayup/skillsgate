@@ -10,7 +10,7 @@ export function StatusBar() {
     ? "q=back"
     : state.focusedPane === "search"
       ? "Tab=results  Esc=exit search"
-      : "/=search  Tab=switch pane"
+      : "/=search  a=add  Tab=switch pane"
 
   const statusText = `Skills: ${skillCount} | Agents: ${agentCount} | ${focusHint} | ?=help 1/2/3=tabs`
 

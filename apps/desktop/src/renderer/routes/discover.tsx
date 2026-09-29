@@ -689,7 +689,7 @@ function DetailPanel({
                 </button>
               )}
 
-              <CommandChip source={skill.source} />
+              <CommandChip source={skill.source} skillName={skill.skillId} />
             </div>
 
             {!installed && availableAgents.length > 0 && (

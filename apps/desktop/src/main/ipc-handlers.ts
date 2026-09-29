@@ -15,6 +15,7 @@ import matter from "gray-matter"
 import {
   parseSource as parseSharedSource,
   tryParseInstallCommand,
+  parseSkillFrontmatter,
   type ParsedSource as SharedParsedSource,
 } from "@skillsgate/skill-sources"
 import { app } from "electron"
@@ -56,6 +57,7 @@ import {
   setExclusion,
   type CoreAgent,
   type CoreInstallOptions,
+  type CoreRemoveMode,
 } from "./core-skills"
 import {
   ensurePersistentRepo,
@@ -401,6 +403,32 @@ const agentRegistry: Record<string, AgentEntry> = {
       (await dirExists(path.join(home, ".mercury"))) ||
       (await commandExists("mercury")),
   },
+  qoder: {
+    name: "qoder",
+    displayName: "Qoder",
+    shortCode: "QD",
+    globalSkillsDir: path.join(home, ".qoder", "skills"),
+    detectInstalled: async () =>
+      (await dirExists(path.join(home, ".qoder"))) ||
+      (await commandExists("qoder")) ||
+      (await commandExists("qodercli")) ||
+      (await dirExists("/Applications/Qoder IDE.app")) ||
+      (await dirExists("/Applications/Qoder.app")),
+  },
+  "qoder-cn": {
+    name: "qoder-cn",
+    displayName: "Qoder CN",
+    shortCode: "QCN",
+    globalSkillsDir: path.join(home, ".qoder-cn", "skills"),
+    detectInstalled: async () =>
+      (await dirExists(path.join(home, ".qoder-cn"))) ||
+      (await commandExists("qoder-cn")) ||
+      (await commandExists("qodercn")) ||
+      (await commandExists("qoderclicn")) ||
+      (await dirExists("/Applications/Qoder CN IDE.app")) ||
+      (await dirExists("/Applications/Qoder CN.app")) ||
+      (await dirExists("/Applications/Qoder IDE CN.app")),
+  },
   zed: {
     name: "zed",
     displayName: "Zed",
@@ -501,6 +529,8 @@ const PROJECT_PROBES = [
   { subpath: ".workbuddy-ai/skills" },
   { subpath: ".pi/skills" },
   { subpath: ".mercury/skills" },
+  { subpath: ".qoder/skills" },
+  { subpath: ".qoder-cn/skills" },
   { subpath: ".zed/skills" },
   { subpath: ".agents/skills" },
 ]
@@ -528,14 +558,8 @@ let lastBroadcastFingerprint: string | null = null
 async function parseSkillMd(filePath: string): Promise<ParsedSkill | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8")
-    const { data: frontmatter } = matter(raw)
-
-    if (
-      typeof frontmatter.name !== "string" ||
-      typeof frontmatter.description !== "string"
-    ) {
-      return null
-    }
+    const frontmatter = parseSkillFrontmatter(raw, matter)
+    if (!frontmatter) return null
 
     return {
       name: frontmatter.name,
@@ -1400,14 +1424,14 @@ type ResolvedSource = {
  * case-insensitive, consistent with the CLI's `filterSkills()`.
  */
 async function resolveSourceSkills(
-  source: string,
+  source: string | ParsedSource,
   skillFilter: string[] = [],
 ): Promise<{ ok: true; value: ResolvedSource } | { ok: false; error: string }> {
-  const parsed = parseSource(source)
+  const parsed = typeof source === "string" ? parseSource(source) : source
   if (!parsed) {
     return {
       ok: false,
-      error: `Could not parse source: "${source}". Expected owner/repo, GitHub URL, or local path.`,
+      error: `Could not parse source: "${typeof source === "string" ? source : ""}". Expected owner/repo, GitHub URL, or local path.`,
     }
   }
 
@@ -1418,7 +1442,17 @@ async function resolveSourceSkills(
     if (!repoRes.success) {
       return { ok: false, error: `克隆/拉取仓库失败: ${repoRes.error}` }
     }
-    sourceDir = repoRes.repoDir
+    if (parsed.subpath) {
+      const candidate = path.join(repoRes.repoDir, parsed.subpath)
+      if (await pathExists(candidate)) {
+        const stat = await fs.stat(candidate).catch(() => null)
+        sourceDir = stat?.isDirectory() ? candidate : path.dirname(candidate)
+      } else {
+        return { ok: false, error: `仓库中不存在指定路径：${parsed.subpath}` }
+      }
+    } else {
+      sourceDir = repoRes.repoDir
+    }
   } else {
     sourceDir = parsed.url
     const problem = await describeLocalPathProblem(sourceDir)
@@ -1874,14 +1908,29 @@ export function registerIpcHandlers(): void {
       }
 
       const command = parsed.value
-      const source =
+      const label =
         command.source.type === "local"
           ? command.source.localPath!
-          : `${command.source.owner}/${command.source.repo}`
+          : command.source.subpath
+            ? `${command.source.owner}/${command.source.repo}/${command.source.subpath}`
+            : `${command.source.owner}/${command.source.repo}`
 
-      const resolved = await resolveSourceSkills(source, command.skillFilter)
+      const installSource =
+        command.source.type === "local"
+          ? command.source.localPath!
+          : command.source.subpath
+            ? `${command.source.url}/tree/${command.source.ref || "main"}/${command.source.subpath}`
+            : `${command.source.owner}/${command.source.repo}`
+
+      const resolved = await resolveSourceSkills(command.source, command.skillFilter)
       if (!resolved.ok) {
-        return { ...blank(), wasCommand: command.wasCommand, label: source, error: resolved.error }
+        return {
+          ...blank(),
+          wasCommand: command.wasCommand,
+          label,
+          installSource,
+          error: resolved.error,
+        }
       }
 
       try {
@@ -1889,7 +1938,8 @@ export function registerIpcHandlers(): void {
           ok: true,
           wasCommand: command.wasCommand,
           sourceType: command.source.type,
-          label: source,
+          label,
+          installSource,
           skills: resolved.value.skills.map((skill) => ({
             name: skill.name,
             description: skill.description ?? "",
@@ -2658,12 +2708,23 @@ Add your skill instructions here.
     return res
   })
 
-  ipcMain.handle("core:remove", async (_e, skillName: string) => {
-    const res = await removeCoreSkill(skillName, await getCoreAgents())
-    if (!res.ok) throw new Error(res.error || "Remove failed")
-    await rescanAndCache().catch(() => undefined)
-    return res
-  })
+  ipcMain.handle(
+    "core:remove",
+    async (_e, skillName: string, mode?: CoreRemoveMode) => {
+      const res = await removeCoreSkill(skillName, await getCoreAgents(), { mode })
+      if (!res.ok) throw new Error(res.error || "Remove failed")
+      if (mode === "purge") {
+        const safeName = sanitizeName(skillName)
+        const lock = await readSkillLock()
+        if (lock.skills[safeName]) {
+          delete lock.skills[safeName]
+          await writeSkillLock(lock)
+        }
+      }
+      await rescanAndCache().catch(() => undefined)
+      return res
+    },
+  )
 
   ipcMain.handle(
     "core:set-exclusion",

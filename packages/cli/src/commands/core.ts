@@ -11,12 +11,14 @@ import { agents, detectInstalledAgents } from "../core/agents.js";
 import {
   applyCoreSync,
   getCoreStatus,
+  installDirToCore,
   installSkillToCore,
   listCoreEntries,
   planCoreSync,
   promoteToCore,
   readCoreConfig,
   removeCoreSkill,
+  resolveLocalSkill,
   setExclusion,
   syncCore,
 } from "../core/core-skills.js";
@@ -31,6 +33,9 @@ interface CoreOptions {
   json: boolean;
   agent?: string[];
   from?: string;
+  fromPath?: string;
+  copy?: boolean;
+  replace?: boolean;
   positional: string[];
 }
 
@@ -40,6 +45,10 @@ function parseOptions(args: string[]): CoreOptions {
     yes: false,
     json: false,
     agent: undefined,
+    from: undefined,
+    fromPath: undefined,
+    copy: false,
+    replace: false,
     positional: [],
   };
   const agentList: string[] = [];
@@ -49,9 +58,14 @@ function parseOptions(args: string[]): CoreOptions {
     if (arg === "--dry-run" || arg === "-n") opts.dryRun = true;
     else if (arg === "--yes" || arg === "-y") opts.yes = true;
     else if (arg === "--json") opts.json = true;
+    else if (arg === "--copy") opts.copy = true;
+    else if (arg === "--replace" || arg === "--force") opts.replace = true;
     else if ((arg === "-a" || arg === "--agent") && args[i + 1])
       agentList.push(args[++i]);
     else if (arg === "--from" && args[i + 1]) opts.from = args[++i];
+    else if (arg.startsWith("--from=")) opts.from = arg.slice("--from=".length);
+    else if (arg === "--from-path" && args[i + 1]) opts.fromPath = args[++i];
+    else if (arg.startsWith("--from-path=")) opts.fromPath = arg.slice("--from-path=".length);
     else if (!arg.startsWith("-")) opts.positional.push(arg);
   }
 
@@ -293,13 +307,92 @@ async function runCoreSync(opts: CoreOptions): Promise<void> {
 
 // ---------- core add ----------
 
+function isPathLike(p: string): boolean {
+  return (
+    p.startsWith(".") ||
+    p.startsWith("~") ||
+    p.startsWith("/") ||
+    p.includes("/") ||
+    p.includes("\\")
+  );
+}
+
 async function runCoreAdd(opts: CoreOptions): Promise<void> {
-  const name = opts.positional[0];
-  if (!name) {
-    console.error(fmt.error("Usage: skillsgate core add <name> [--from <agent>]"));
+  const arg = opts.positional[0];
+  const fromPath = opts.fromPath;
+
+  if (!arg && !fromPath) {
+    console.error(
+      fmt.error(
+        "Usage: skillsgate core add <name|path> [--from <agent>] [--from-path <dir>] [--copy] [--replace]",
+      ),
+    );
     process.exit(1);
   }
 
+  let isPathAdd = false;
+  let targetPath = fromPath;
+  let explicitName = fromPath ? arg : undefined;
+
+  if (fromPath) {
+    isPathAdd = true;
+  } else if (arg && isPathLike(arg)) {
+    isPathAdd = true;
+    targetPath = arg;
+    explicitName = undefined;
+  }
+
+  if (isPathAdd && targetPath) {
+    const resolved = await resolveLocalSkill(targetPath, explicitName);
+    if (!resolved.ok) {
+      console.error(fmt.error(`  ${resolved.error}`));
+      process.exit(1);
+    }
+
+    if (opts.dryRun) {
+      const modeLabel = opts.copy ? "copy" : "symlink";
+      console.log(
+        fmt.dim(
+          `  Would install ${resolved.name} into core (${modeLabel} from ${shortenPath(resolved.skillDir)})`,
+        ),
+      );
+      await runCoreSync({ ...opts, dryRun: true });
+      return;
+    }
+
+    const res = await installDirToCore(resolved.skillDir, resolved.name, {
+      mode: opts.copy ? "copy" : "link",
+      replace: opts.replace,
+    });
+
+    if (!res.ok) {
+      console.error(fmt.error(`  ${res.error ?? "Failed to add skill to core."}`));
+      if (res.conflict) {
+        console.error(fmt.dim("  Use --replace to overwrite the existing core entry."));
+      }
+      process.exit(1);
+    }
+
+    if (res.already) {
+      console.log(
+        fmt.warn(
+          `  ${resolved.name} is already linked into core from ${shortenPath(resolved.skillDir)}.`,
+        ),
+      );
+    } else {
+      const modeLabel = opts.copy ? "Copied" : "Linked";
+      console.log(
+        fmt.success(
+          `  ${modeLabel} ${resolved.name} from ${shortenPath(resolved.skillDir)} into core.`,
+        ),
+      );
+    }
+
+    await runCoreSync({ ...opts, dryRun: false });
+    return;
+  }
+
+  const name = arg!;
   const coreDir = CORE_SKILLS_DIR();
   const coreTarget = path.join(coreDir, name);
 
@@ -308,7 +401,7 @@ async function runCoreAdd(opts: CoreOptions): Promise<void> {
     console.log(fmt.warn(`  ${name} is already in the core set.`));
     return;
   } catch {
-    // not core yet — continue
+    // Not core yet, continue.
   }
 
   // 1. Promote from an explicit or discovered agent-owned directory.
@@ -359,12 +452,57 @@ async function runCoreAdd(opts: CoreOptions): Promise<void> {
       return;
     }
   } catch {
-    // not in the store
+    // Not in the store.
+  }
+
+  // 3. Fallback: check if name is a local directory containing SKILL.md.
+  const localCandidate = path.resolve(name);
+  try {
+    const lst = await fs.lstat(localCandidate);
+    if (lst.isDirectory()) {
+      const resolved = await resolveLocalSkill(localCandidate);
+      if (resolved.ok) {
+        if (opts.dryRun) {
+          const modeLabel = opts.copy ? "copy" : "symlink";
+          console.log(
+            fmt.dim(
+              `  Would install ${resolved.name} into core (${modeLabel} from ${shortenPath(resolved.skillDir)})`,
+            ),
+          );
+          await runCoreSync({ ...opts, dryRun: true });
+          return;
+        }
+
+        const res = await installDirToCore(resolved.skillDir, resolved.name, {
+          mode: opts.copy ? "copy" : "link",
+          replace: opts.replace,
+        });
+
+        if (!res.ok) {
+          console.error(fmt.error(`  ${res.error ?? "Failed to add skill to core."}`));
+          if (res.conflict) {
+            console.error(fmt.dim("  Use --replace to overwrite the existing core entry."));
+          }
+          process.exit(1);
+        }
+
+        const modeLabel = opts.copy ? "Copied" : "Linked";
+        console.log(
+          fmt.success(
+            `  ${modeLabel} ${resolved.name} from ${shortenPath(resolved.skillDir)} into core.`,
+          ),
+        );
+        await runCoreSync({ ...opts, dryRun: false });
+        return;
+      }
+    }
+  } catch {
+    // Not a local directory.
   }
 
   console.error(
     fmt.error(
-      `  Could not find ${name} as a tool-owned directory or in ${shortenPath(storeDir)}.`,
+      `  Could not find ${name} as a tool-owned directory, local path, or in ${shortenPath(storeDir)}.`,
     ),
   );
   console.error(
@@ -480,7 +618,7 @@ export function printCoreHelp(): void {
   const BOLD = fmt.bold;
   const DIM = fmt.dim;
   console.log();
-  console.log(`  ${BOLD("skillsgate core")} ${DIM("— manage the core skill set")}`);
+  console.log(`  ${BOLD("skillsgate core")} ${DIM("- manage the core skill set")}`);
   console.log();
   console.log(
     `  Core skills live in ${DIM("~/.agents/skills")} and are symlinked into every detected tool.`,
@@ -490,12 +628,18 @@ export function printCoreHelp(): void {
   console.log(`    list                     List core skills`);
   console.log(`    status                   Show per-tool fan-out gaps`);
   console.log(`    sync ${DIM("[--dry-run]")}          Reconcile links across detected tools`);
-  console.log(`    add ${DIM("<name>")} ${DIM("[--from <agent>]")}  Promote an existing skill into core`);
+  console.log(`    add ${DIM("<name|path>")}          Promote an existing skill or add from local path into core`);
   console.log(`    remove ${DIM("<name>")}             Remove from core and unlink everywhere`);
   console.log(`    exclude ${DIM("<agent> <skill>")}    Make one tool opt out of a core skill`);
   console.log(`    include ${DIM("<agent> <skill>")}    Undo an exclusion`);
   console.log();
-  console.log(`  ${BOLD("Options:")}`);
+  console.log(`  ${BOLD("Options for core add:")}`);
+  console.log(`    --from <agent>           Promote from a specific tool`);
+  console.log(`    --from-path <dir>        Add from a local directory (symlink by default)`);
+  console.log(`    --copy                   Copy files instead of symlinking when adding from path`);
+  console.log(`    --replace                Replace existing core skill of the same name`);
+  console.log();
+  console.log(`  ${BOLD("General Options:")}`);
   console.log(`    -a, --agent <id>         Limit to specific tool(s)`);
   console.log(`    -n, --dry-run            Show the plan without applying it`);
   console.log(`    -y, --yes                Skip confirmation prompts`);
@@ -503,7 +647,7 @@ export function printCoreHelp(): void {
   console.log();
 }
 
-/** Used by `add` and the installer path when a skill is explicitly targeted at core. */
+/** Used by add and the installer path when a skill is explicitly targeted at core. */
 export async function addSkillToCore(
   name: string,
   sourceSkillMd: string,
@@ -511,6 +655,27 @@ export async function addSkillToCore(
   const parsed = await parseSkillMd(sourceSkillMd);
   if (!parsed) return false;
   const res = await installSkillToCore(parsed);
+  if (!res.ok) {
+    console.error(fmt.error(`  ${res.error}`));
+    return false;
+  }
+  await syncCore();
+  return true;
+}
+
+export async function addPathToCore(
+  targetPath: string,
+  opts: { copy?: boolean; replace?: boolean; explicitName?: string } = {},
+): Promise<boolean> {
+  const resolved = await resolveLocalSkill(targetPath, opts.explicitName);
+  if (!resolved.ok) {
+    console.error(fmt.error(`  ${resolved.error}`));
+    return false;
+  }
+  const res = await installDirToCore(resolved.skillDir, resolved.name, {
+    mode: opts.copy ? "copy" : "link",
+    replace: opts.replace,
+  });
   if (!res.ok) {
     console.error(fmt.error(`  ${res.error}`));
     return false;

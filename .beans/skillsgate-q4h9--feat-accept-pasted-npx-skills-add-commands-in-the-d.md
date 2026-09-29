@@ -1,11 +1,11 @@
 ---
 # skillsgate-q4h9
 title: 'feat: accept pasted `npx skills add` commands in the desktop'
-status: in_progress
+status: completed
 type: task
 priority: high
 created_at: 2026-09-15T01:15:00Z
-updated_at: 2026-09-15T14:12:00Z
+updated_at: 2026-09-29T09:08:00Z
 ---
 
 Let users paste the ecosystem-conventional install command into the desktop UI:
@@ -72,11 +72,14 @@ hijacking. The whole point is that the *entry point* is familiar while the
 - [x] Desktop paste panel — `components/install-from-command.tsx`; the Discover
       search box swaps the grid for it when `INSTALL_COMMAND_HINT` matches
 - [x] `discover.tsx` command hint is now a `CommandChip` with a copy button
+- [x] Serializer sharing resolved via `@skillsgate/skill-sources/format` subpath export;
+      desktop renderer imports `formatInstallCommand` without Node builtins or warnings
 
 ### Verified
 
 `tsc -p tsconfig.node.json` and `tsconfig.web.json` clean · `electron-vite build`
-clean · 36/36 shared tests · 8/8 CLI tests · CLI typecheck + `tsup` clean.
+clean with 0 node externalization warnings · 36/36 shared tests · 8/8 CLI tests ·
+CLI typecheck + `tsup` clean.
 Built bundles: `out/main/index.js` has **0** references to
 `@skillsgate/skill-sources` (inlined, so no `ERR_REQUIRE_ESM`), and
 `skills:resolve-source` is present in both main and preload.
@@ -89,10 +92,9 @@ Built bundles: `out/main/index.js` has **0** references to
 - **#8 refined.** Skills the command named explicitly are pre-selected; "nothing
   selected" now applies only when the command named none, where the user really
   does have to choose from the whole repo.
-- **#10 half-done.** The chip is fixed and copyable, but it does **not** share a
-  serializer with the parser: the renderer cannot import the shared barrel
-  because `source-parser.ts` pulls in `node:path`/`node:os`. Needs a browser-safe
-  grammar subpath.
+- **#10 resolved.** Serializer shared via `@skillsgate/skill-sources/format`.
+  Extracted `formatInstallCommand()` into an isolated subpath without `node:path`/`node:os`,
+  preventing browser bundle warnings and keeping parser and display strictly aligned.
 - **CLI exposure dropped.** `packages/cli/src/cli.ts` and `commands/` are
   unreachable — `bin/cli.mjs` launches the TUI platform binary and the TUI entry
   ignores argv entirely. Adding the feature there would have been dead code.

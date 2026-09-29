@@ -50,10 +50,37 @@ describe("parseInstallCommand — command detection", () => {
   });
 
   it("treats a bare source as a plain source, not a command", () => {
-    for (const bare of ["owner/repo", "owner/repo@skill", "https://github.com/owner/repo"]) {
+    for (const bare of [
+      "owner/repo",
+      "owner/repo@skill",
+      "https://github.com/owner/repo",
+      "https://github.com/ollaya-dev/ollaya/blob/main/skills/ollaya-decisions/SKILL.md",
+    ]) {
       const parsed = parseInstallCommand(bare);
       assert.equal(parsed.wasCommand, false, `${bare} should not be a command`);
     }
+  });
+
+  it("parses GitHub blob URLs with ref and subpath", () => {
+    const parsed = parseInstallCommand(
+      "https://github.com/ollaya-dev/ollaya/blob/main/skills/ollaya-decisions/SKILL.md",
+    );
+    assert.equal(parsed.source.type, "github");
+    assert.equal(parsed.source.owner, "ollaya-dev");
+    assert.equal(parsed.source.repo, "ollaya");
+    assert.equal(parsed.source.ref, "main");
+    assert.equal(parsed.source.subpath, "skills/ollaya-decisions");
+  });
+
+  it("parses shorthand GitHub tree URLs with ref and subpath", () => {
+    const parsed = parseInstallCommand(
+      "ollaya-dev/ollaya/tree/main/skills/ollaya-decisions",
+    );
+    assert.equal(parsed.source.type, "github");
+    assert.equal(parsed.source.owner, "ollaya-dev");
+    assert.equal(parsed.source.repo, "ollaya");
+    assert.equal(parsed.source.ref, "main");
+    assert.equal(parsed.source.subpath, "skills/ollaya-decisions");
   });
 
   it("strips a leading shell prompt", () => {

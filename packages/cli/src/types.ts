@@ -30,6 +30,8 @@ export type AgentType =
   | "workbuddy"
   | "workbuddy-ai"
   | "mercury"
+  | "qoder"
+  | "qoder-cn"
   | "windsurf"
   | "zed"
   // Retained only so persisted data (e.g. lock `lastSelectedAgents`, caches) that
@@ -170,6 +172,19 @@ export interface CoreStatusEntry {
   conflicts: string[];
   excluded: string[];
   dangling: string[];
+}
+
+export interface CoreInstallOptions {
+  mode?: "copy" | "link";
+  replace?: boolean;
+}
+
+export interface CoreInstallOutcome {
+  ok: boolean;
+  path: string;
+  error?: string;
+  already?: boolean;
+  conflict?: boolean;
 }
 
 // ---------- Publish Types ----------
