@@ -1,0 +1,21 @@
+---
+# skillsgate-1w5u
+title: 'fix(db): consolidate three drifted SQLite migration sets'
+status: todo
+type: bug
+created_at: 2026-09-29T11:27:28Z
+updated_at: 2026-09-29T11:27:28Z
+---
+
+The schema is defined three times and the copies disagree:
+- apps/desktop/src/main/db/migrations.ts (v1-v4)
+- packages/tui/src/db/migrations.ts (v1-v4)
+- packages/local-db/src/migrations.ts (v1 only)
+
+desktop cached_skills has 5 columns TUI lacks; local-db remote_servers has auto_sync the others lack. Every statement is CREATE TABLE IF NOT EXISTS, so the first process to open the file defines the schema and later ones silently run against tables missing their columns. Masked, not solved.
+
+## Checklist
+- [ ] Single source of truth for migrations, consumed by desktop and TUI
+- [ ] Existing databases created by either surface keep working (no data loss)
+- [ ] New installs get one canonical schema
+- [ ] Tests prove both old shapes upgrade

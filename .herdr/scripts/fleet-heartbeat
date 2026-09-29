@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# fleet-heartbeat: lightweight worker/leader progress heartbeat for herdr-run.
+# Heartbeats live in .herdr/heartbeat/ (NOT .herdr/inbox/) so they never
+# trigger review routing — the watcher only updates state + watchdog tiers.
+#
+# Usage:
+#   fleet-heartbeat <agent> <bean> <pct 0-100> "<message>" [--leader] [ctx_pct] [cost_tier]
+#   --leader: also refresh the Leader lease (.herdr/leader.heartbeat).
+#   ctx_pct (P2-1 ytbq, optional): context-window fill 0-100 for the board's water level.
+#   cost_tier (P2-1 ytbq, optional): spec|coder|review — which cost tier is burning.
+# Exit 0 on success. JSON is serialized via python3 (no shell interpolation).
+set -euo pipefail
+
+if [ "$#" -lt 3 ]; then
+  echo "Usage: $0 <agent> <bean> <pct 0-100> \"<message>\" [--leader] [ctx_pct] [cost_tier]" >&2
+  exit 1
+fi
+
+AGENT="$1"; BEAN="$2"; PCT="$3"; MSG="${4:-}"; LEADER_FLAG="${5:-}"
+CTX=""; TIER=""
+for _extra in "${5:-}" "${6:-}" "${7:-}"; do
+  case "$_extra" in
+    --leader) LEADER_FLAG="--leader" ;;
+    ''|*[!0-9]*) case "$_extra" in spec|coder|review) TIER="$_extra" ;; *) [ -n "$_extra" ] && [ "$_extra" != "--leader" ] && MSG="$MSG $_extra" ;; esac ;;
+    *) [ -z "$CTX" ] && CTX="$_extra" || true ;;
+  esac
+done
+if [ -n "$CTX" ] && { [ "$CTX" -gt 100 ] 2>/dev/null || [ "$CTX" -lt 0 ] 2>/dev/null; }; then
+  echo "ctx_pct must be 0-100 (got: $CTX)" >&2; exit 1
+fi
+
+case "$PCT" in ''|*[!0-9]*) echo "pct must be 0-100 (got: $PCT)" >&2; exit 1;; esac
+if [ "$PCT" -gt 100 ]; then echo "pct must be 0-100 (got: $PCT)" >&2; exit 1; fi
+
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || echo "")"
+if [ -n "$COMMON_DIR" ]; then
+  REPO_ROOT="$(cd "$COMMON_DIR/.." && pwd)"
+else
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+fi
+
+HB_DIR="$REPO_ROOT/.herdr/heartbeat"
+mkdir -p "$HB_DIR" 2>/dev/null || { HB_DIR="$PWD/.herdr/heartbeat"; mkdir -p "$HB_DIR"; }
+
+TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+HB_FILE="$HB_DIR/${AGENT}-${BEAN}.json"
+
+python3 - "$AGENT" "$BEAN" "$PCT" "$MSG" "$TS" "$HB_FILE" "$CTX" "$TIER" << 'PYEOF'
+import json, sys
+agent, bean, pct, msg, ts, path, ctx, tier = (sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8])
+payload = {"agent": agent, "bean": bean, "pct": int(pct), "message": msg, "timestamp": ts}
+if ctx != "":
+    try:
+        payload["ctx_pct"] = max(0, min(100, int(ctx)))
+    except Exception:
+        pass
+if tier != "":
+    payload["cost_tier"] = tier
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print(f"[fleet-heartbeat] {agent} {bean} {pct}% @ {ts}" + (f" ctx={payload.get('ctx_pct','-')}" if "ctx_pct" in payload else "") + (f" tier={tier}" if tier else ""))
+PYEOF
+
+if [ "$LEADER_FLAG" = "--leader" ] || [ "${4:-}" = "--leader" ]; then
+  python3 - "$AGENT" "$BEAN" "$TS" "$REPO_ROOT/.herdr/leader.heartbeat" "$REPO_ROOT/.herdr/lanes/groups.json" << 'PYEOF'
+import json, sys
+agent, bean, ts, path, gpath = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+try:
+    cur = json.load(open(path, encoding="utf-8"))
+    term = int(cur.get("term") or 0)
+    if cur.get("leader") != agent:
+        term = term  # term only advances via watcher election, never here
+except Exception:
+    term = 0
+with open(path, "w", encoding="utf-8") as f:
+    json.dump({"leader": agent, "term": term, "bean": bean, "timestamp": ts}, f, indent=2)
+    f.write("\n")
+print(f"[fleet-heartbeat] leader lease refreshed: {agent} term={term}")
+PYEOF
+fi

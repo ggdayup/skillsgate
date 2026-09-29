@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# fleet-checkpoint: record a resumable progress checkpoint for herdr-run.
+# Checkpoints live in .herdr/checkpoints/<bean>-<agent>.json and let a
+# successor worker continue from next_step instead of redoing finished work.
+# JSON is serialized via python3 (no shell interpolation).
+#
+# Usage:
+#   fleet-checkpoint <agent> <bean> --done "step1,step2" --next "step3"
+#     [--artifacts "commit:<sha>,report:<path>"] [--key <idempotency-key>]
+#   Re-running with the same --key is idempotent (last write wins, no dup).
+set -euo pipefail
+
+if [ "$#" -lt 5 ]; then
+  echo "Usage: $0 <agent> <bean> --done \"step1,step2\" --next \"step3\" [--artifacts \"...\"] [--key <idempotency-key>]" >&2
+  exit 1
+fi
+
+AGENT="$1"; BEAN="$2"; shift 2
+DONE=""; NEXT=""; ARTIFACTS=""; KEY=""
+while [ $# -gt 0 ]; do case "$1" in
+  --done) DONE="${2:-}"; shift 2 ;;
+  --next) NEXT="${2:-}"; shift 2 ;;
+  --artifacts) ARTIFACTS="${2:-}"; shift 2 ;;
+  --key) KEY="${2:-}"; shift 2 ;;
+  *) echo "unknown arg: $1" >&2; exit 1 ;;
+esac; done
+
+[ -n "$NEXT" ] || { echo "checkpoint needs --next" >&2; exit 1; }
+[ -n "$KEY" ] || KEY="$BEAN:$AGENT:$NEXT"
+
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || echo "")"
+if [ -n "$COMMON_DIR" ]; then
+  REPO_ROOT="$(cd "$COMMON_DIR/.." && pwd)"
+else
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+fi
+
+CKPT_DIR="$REPO_ROOT/.herdr/checkpoints"
+mkdir -p "$CKPT_DIR" 2>/dev/null || { CKPT_DIR="$PWD/.herdr/checkpoints"; mkdir -p "$CKPT_DIR"; }
+
+BASE="$(git rev-parse --verify main 2>/dev/null || git rev-parse --verify HEAD 2>/dev/null || echo unknown)"
+TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+python3 - "$AGENT" "$BEAN" "$DONE" "$NEXT" "$ARTIFACTS" "$KEY" "$BASE" "$TS" "$CKPT_DIR/${BEAN}-${AGENT}.json" << 'PYEOF'
+import json, sys
+agent, bean, done, nxt, arts, key, base, ts, path = sys.argv[1:10]
+payload = {
+    "bean": bean,
+    "agent": agent,
+    "base": base,
+    "done_steps": [s.strip() for s in done.split(",") if s.strip()],
+    "next_step": nxt.strip(),
+    "artifacts": [s.strip() for s in arts.split(",") if s.strip()],
+    "idempotency_key": key,
+    "timestamp": ts,
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print(f"[fleet-checkpoint] {bean} {agent}: next='{nxt.strip()}' key={key}")
+PYEOF

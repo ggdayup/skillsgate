@@ -1,0 +1,49 @@
+{
+  "_comment": "Capability groups for this project's fleet. Coders are all on the agy family so the single configured reviewer (opencode/muse-spark) is cross-family for every coder — the ternary rule the watcher enforces via fleet_agent_group.",
+  "roles": {
+    "agy-coder-1": "coder",
+    "agy-coder-2": "coder",
+    "agy-coder-3": "coder",
+    "agy-coder-4": "coder",
+    "agy-coder-5": "coder",
+    "spark-reviewer-1": "reviewer"
+  },
+  "role_patterns": {
+    "(^|-)coder(-[0-9]+)?$": "coder",
+    "(^|-)reviewer?(-[0-9]+)?$": "reviewer",
+    "(^|-)opt(-[0-9]+)?$": "coder",
+    "(^|-)leader(-[0-9]+)?$": "leader",
+    "^leader-": "leader"
+  },
+  "families": {
+    "agy-*": "agy",
+    "spark-*": "opencode",
+    "codex-*": "codex"
+  },
+  "groups": {
+    "bulk": [
+      "agy-coder-1",
+      "agy-coder-2",
+      "agy-coder-3",
+      "agy-coder-4",
+      "agy-coder-5"
+    ],
+    "review": [
+      "spark-reviewer-1"
+    ]
+  },
+  "standby": [
+    "codex-*"
+  ],
+  "leader_eligible": [
+    "agy-coder-1",
+    "spark-reviewer-1"
+  ],
+  "thresholds": {
+    "heartbeat_warn_seconds": 300,
+    "stalled_seconds": 900,
+    "leader_lease_seconds": 180,
+    "quota_warn_pct": 20,
+    "review_fanout": 2
+  }
+}

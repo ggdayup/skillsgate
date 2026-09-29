@@ -132,3 +132,5 @@ apps/web/*.tsbuildinfo
 .claude/
 .venv/
 .qoder/
+# Machine-local fleet lane placement (herdr-run); never commit.
+.herdr/config/fleet.env
