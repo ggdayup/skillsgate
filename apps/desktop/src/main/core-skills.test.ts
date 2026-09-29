@@ -182,3 +182,30 @@ describe("removeCoreSkill", () => {
     assert.ok(await exists(outside));
   });
 });
+
+describe("fan-out links", () => {
+  it("links a tool whose skills dir sits behind a symlinked ancestor", async () => {
+    // Regression where Zed keeps ~/.config/zed as a symlink and the fan-out link
+    // was derived from the logical path. The link resolved to a nonexistent directory
+    // and sync never converged.
+    await mkCoreEntry("zed-visible");
+
+    const first = await applyCoreSync(await planCoreSync([zedAgent]));
+
+    assert.deepEqual(first.failed, []);
+    assert.equal(first.linked, 1);
+
+    const link = path.join(zedLogicalDir, "zed-visible");
+    assert.ok(await exists(link));
+    // stat() follows the link to catch incorrect relative path resolution.
+    const content = await fs
+      .readFile(path.join(link, "SKILL.md"), "utf-8")
+      .catch(() => null);
+    assert.equal(content, "# zed-visible\n");
+
+    const second = await applyCoreSync(await planCoreSync([zedAgent]));
+    assert.equal(second.linked, 0);
+    assert.equal(second.alreadyPresent, 1);
+  });
+});
+
