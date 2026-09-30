@@ -5,7 +5,7 @@ status: completed
 type: bug
 priority: normal
 created_at: 2026-09-29T11:27:28Z
-updated_at: 2026-09-29T11:46:00Z
+updated_at: 2026-09-30T02:31:37Z
 ---
 
 The schema is defined three times and the copies disagree:
@@ -20,3 +20,10 @@ desktop cached_skills has 5 columns TUI lacks; local-db remote_servers has auto_
 - [x] Existing databases created by either surface keep working (no data loss)
 - [x] New installs get one canonical schema
 - [x] Tests prove both old shapes upgrade
+
+
+## Summary of Changes (Landed)
+- **Bean ID**: `skillsgate-1w5u`
+- **Landed Commit**: `c61b331d6f87b5ca48d673666842b7ebdad30a99`
+- **Reviewer Report**: `.herdr/reports/skillsgate-1w5u-review.md`
+- **Test Gate**: `bun install --ignore-scripts && cd packages/cli && bun run test`
