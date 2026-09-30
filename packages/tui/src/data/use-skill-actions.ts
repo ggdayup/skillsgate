@@ -2,15 +2,18 @@ import { useCallback } from "react"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
-import { exec as execCb } from "node:child_process"
-import { promisify } from "node:util"
 import { useStore, useDispatch } from "../store/context.js"
 import { useDb } from "../db/context.js"
 import type { EnrichedSkill, Action } from "../store/types.js"
 
+import {
+  tryParseInstallCommand,
+  type ParsedInstallCommand,
+} from "@skillsgate/skill-sources"
+
 // CLI core imports -- these share the same Bun runtime
 import { parseSource } from "../../../cli/src/core/source-parser.js"
-import { cleanupTempDir, fetchTreeSha } from "../../../cli/src/core/git.js"
+import { cloneRepo, cleanupTempDir, fetchTreeSha } from "../../../cli/src/core/git.js"
 import { discoverSkills } from "../../../cli/src/core/skill-discovery.js"
 import {
   installDirToCore,
@@ -113,6 +116,279 @@ interface UseSkillActionsResult {
   ) => Promise<InstallLocalPathResult>
 }
 
+export type InstallRoute =
+  | {
+      type: "github"
+      parsed: ParsedInstallCommand
+    }
+  | {
+      type: "local"
+      parsed: ParsedInstallCommand
+    }
+  | {
+      type: "unsupported"
+      error: string
+    }
+
+export function determineInstallRoute(sourceStr: string): InstallRoute {
+  const trimmed = sourceStr.trim()
+  if (!trimmed) {
+    return {
+      type: "unsupported",
+      error: "Source cannot be empty",
+    }
+  }
+
+  const cleaned = trimmed.startsWith("github:") ? trimmed.slice(7).trim() : trimmed
+
+  const result = tryParseInstallCommand(cleaned)
+  if (!result.ok) {
+    return {
+      type: "unsupported",
+      error: result.error,
+    }
+  }
+
+  const { source } = result.value
+  if (source.type === "github") {
+    return {
+      type: "github",
+      parsed: result.value,
+    }
+  }
+
+  if (source.type === "local") {
+    return {
+      type: "local",
+      parsed: result.value,
+    }
+  }
+
+  return {
+    type: "unsupported",
+    error: `Unsupported source type: ${(source as any).type}`,
+  }
+}
+
+export interface InstallSkillDependencies {
+  detectAgents?: () => Promise<AgentConfig[]>
+  cloneRepo?: (source: any) => Promise<string>
+  cleanupTempDir?: (dir: string) => Promise<void>
+  discoverSkills?: (dir: string, subpath?: string) => Promise<Skill[]>
+  installSkillForAgent?: (
+    skill: Skill,
+    agent: AgentConfig,
+    scope: "global" | "project",
+    method: "symlink" | "copy",
+  ) => Promise<{ success: boolean; error?: string }>
+  addSkillToLock?: (name: string, entry: any) => Promise<void>
+  fetchTreeSha?: (owner: string, repo: string, path: string) => Promise<string | null>
+  defaultAgents?: string[]
+  mirrorAgents?: string[]
+}
+
+export async function executeInstallSkill(
+  skill: EnrichedSkill,
+  dispatch: (action: Action) => void,
+  deps: InstallSkillDependencies = {},
+): Promise<void> {
+  const detectAgentsFn = deps.detectAgents ?? detectInstalledAgents
+  const cloneRepoFn = deps.cloneRepo ?? cloneRepo
+  const cleanupTempDirFn = deps.cleanupTempDir ?? cleanupTempDir
+  const discoverSkillsFn = deps.discoverSkills ?? discoverSkills
+  const installSkillForAgentFn = deps.installSkillForAgent ?? installSkillForAgent
+  const addSkillToLockFn = deps.addSkillToLock ?? addSkillToLock
+  const fetchTreeShaFn = deps.fetchTreeSha ?? fetchTreeSha
+
+  dispatch({
+    type: "SHOW_NOTIFICATION",
+    notification: { type: "info", message: `Installing "${skill.name}"...` },
+  })
+
+  try {
+    const sourceStr = resolveSource(skill)
+    if (!sourceStr) {
+      dispatch({
+        type: "SHOW_NOTIFICATION",
+        notification: { type: "error", message: `Cannot determine source for "${skill.name}"` },
+      })
+      return
+    }
+
+    const route = determineInstallRoute(sourceStr)
+    if (route.type === "unsupported") {
+      dispatch({
+        type: "SHOW_NOTIFICATION",
+        notification: { type: "error", message: `Install failed: ${route.error}` },
+      })
+      return
+    }
+
+    const installedAgents = await detectAgentsFn()
+    if (installedAgents.length === 0) {
+      dispatch({
+        type: "SHOW_NOTIFICATION",
+        notification: { type: "error", message: "No AI agents detected on this system" },
+      })
+      return
+    }
+
+    const defaultAgents = deps.defaultAgents ?? []
+    const mirrorAgents = deps.mirrorAgents ?? []
+    const preferredNames =
+      defaultAgents.length > 0
+        ? Array.from(new Set([...defaultAgents, ...mirrorAgents]))
+        : Array.from(
+            new Set([
+              ...installedAgents.map((agent) => agent.name),
+              ...mirrorAgents,
+            ]),
+          )
+    const targetAgents = installedAgents.filter((agent) =>
+      preferredNames.includes(agent.name),
+    )
+
+    if (targetAgents.length === 0) {
+      dispatch({
+        type: "SHOW_NOTIFICATION",
+        notification: { type: "error", message: "No target AI agents available for install" },
+      })
+      return
+    }
+
+    let tmpDir: string | undefined
+    try {
+      let skillDir: string
+      const { source, skillFilter } = route.parsed
+
+      if (route.type === "github") {
+        tmpDir = await cloneRepoFn(source)
+        skillDir = tmpDir
+      } else {
+        if (!source.localPath) {
+          dispatch({
+            type: "SHOW_NOTIFICATION",
+            notification: { type: "error", message: "Install failed: Invalid local path" },
+          })
+          return
+        }
+        skillDir = source.localPath
+      }
+
+      const skills = await discoverSkillsFn(skillDir, source.subpath)
+      if (skills.length === 0) {
+        dispatch({
+          type: "SHOW_NOTIFICATION",
+          notification: { type: "error", message: `No skills found in "${sourceStr}"` },
+        })
+        return
+      }
+
+      let targetSkills = skills
+      const activeFilters = skillFilter.filter((f) => f !== "*")
+      if (activeFilters.length > 0) {
+        const lower = activeFilters.map((f) => f.toLowerCase())
+        targetSkills = skills.filter((s) => lower.includes(s.name.toLowerCase()))
+        if (targetSkills.length === 0) {
+          dispatch({
+            type: "SHOW_NOTIFICATION",
+            notification: {
+              type: "error",
+              message: `Skill "${skillFilter.join(", ")}" not found in "${sourceStr}"`,
+            },
+          })
+          return
+        }
+      } else if (skill.name && skills.some((s) => s.name.toLowerCase() === skill.name.toLowerCase())) {
+        targetSkills = skills.filter((s) => s.name.toLowerCase() === skill.name.toLowerCase())
+      }
+
+      let installedCount = 0
+      let installFailed = false
+      let firstErrorMessage: string | undefined
+
+      for (const skillToInstall of targetSkills) {
+        for (const agent of targetAgents) {
+          const result = await installSkillForAgentFn(
+            skillToInstall,
+            agent,
+            "global",
+            "symlink",
+          )
+          if (result.success) {
+            installedCount++
+          } else {
+            installFailed = true
+            if (!firstErrorMessage && result.error) {
+              firstErrorMessage = result.error
+            }
+          }
+        }
+
+        if (installFailed) {
+          break
+        }
+
+        let sha = ""
+        if (source.type === "github") {
+          try {
+            sha = (await fetchTreeShaFn(
+              source.owner,
+              source.repo,
+              sanitizeName(skillToInstall.name),
+            )) || ""
+          } catch {
+            sha = ""
+          }
+        }
+
+        const lockSource = source.type === "github"
+          ? `github:${source.owner}/${source.repo}`
+          : sourceStr
+
+        await addSkillToLockFn(sanitizeName(skillToInstall.name), {
+          source: lockSource,
+          sourceType: source.type,
+          originalUrl: sourceStr,
+          skillFolderHash: sha,
+        })
+      }
+
+      if (installFailed) {
+        dispatch({
+          type: "SHOW_NOTIFICATION",
+          notification: {
+            type: "error",
+            message: `Install failed: ${firstErrorMessage || "Failed to install skill for agent"}`,
+          },
+        })
+        return
+      }
+
+      dispatch({ type: "REFRESH_SKILLS" })
+
+      const skillNames = targetSkills.map((s) => s.name).join(", ")
+      dispatch({
+        type: "SHOW_NOTIFICATION",
+        notification: {
+          type: "success",
+          message: `Installed ${targetSkills.length} skill(s): ${skillNames} to ${targetAgents.length} agent(s)`,
+        },
+      })
+    } finally {
+      if (tmpDir) {
+        await cleanupTempDirFn(tmpDir)
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    dispatch({
+      type: "SHOW_NOTIFICATION",
+      notification: { type: "error", message: `Install failed: ${msg}` },
+    })
+  }
+}
+
 /**
  * Provides install, remove, and update actions for skills.
  * Uses CLI core modules directly since they share the same Bun runtime.
@@ -124,139 +400,15 @@ export function useSkillActions(): UseSkillActionsResult {
 
   /**
    * Install a skill from its source.
-   * For public skills (with a source in owner/repo format), runs `npx skills add`.
    */
   const installSkill = useCallback(async (skill: EnrichedSkill) => {
-    dispatch({
-      type: "SHOW_NOTIFICATION",
-      notification: { type: "info", message: `Installing "${skill.name}"...` },
+    const defaultAgents = settings.get<string[]>("install.defaultAgents", [])
+    const mirrorAgents = settings.get<string[]>("sync.mirrorAgents", [])
+    await executeInstallSkill(skill, dispatch, {
+      defaultAgents,
+      mirrorAgents,
     })
-
-    try {
-      // Determine the source from metadata or lock entry
-      const sourceStr = resolveSource(skill)
-      if (!sourceStr) {
-        dispatch({
-          type: "SHOW_NOTIFICATION",
-          notification: { type: "error", message: `Cannot determine source for "${skill.name}"` },
-        })
-        return
-      }
-
-      const source = parseSource(sourceStr)
-
-      // Public skills (owner/repo format): use `npx skills add`
-      if (source.type === "github" || isOwnerRepoFormat(sourceStr)) {
-        const repo = source.type === "github"
-          ? `${source.owner}/${source.repo}`
-          : sourceStr
-        await runSkillsAdd(repo, dispatch)
-        return
-      }
-
-      const installedAgents = await detectInstalledAgents()
-      if (installedAgents.length === 0) {
-        dispatch({
-          type: "SHOW_NOTIFICATION",
-          notification: { type: "error", message: "No AI agents detected on this system" },
-        })
-        return
-      }
-
-      const defaultAgents = settings.get<string[]>("install.defaultAgents", [])
-      const mirrorAgents = settings.get<string[]>("sync.mirrorAgents", [])
-      const preferredNames =
-        defaultAgents.length > 0
-          ? Array.from(new Set([...defaultAgents, ...mirrorAgents]))
-          : Array.from(
-              new Set([
-                ...installedAgents.map((agent) => agent.name),
-                ...mirrorAgents,
-              ]),
-            )
-      const targetAgents = installedAgents.filter((agent) =>
-        preferredNames.includes(agent.name),
-      )
-
-      // Local path source uses resolved path directly
-      const tmpDir = source.localPath!
-
-      try {
-        // Discover skills in the downloaded directory
-        const skills = await discoverSkills(tmpDir, source.subpath)
-
-        if (skills.length === 0) {
-          dispatch({
-            type: "SHOW_NOTIFICATION",
-            notification: { type: "error", message: `No skills found in "${sourceStr}"` },
-          })
-          return
-        }
-
-        // Filter if a specific skill was requested
-        let targetSkills = skills
-        if (source.skillFilter) {
-          const filter = source.skillFilter.toLowerCase()
-          targetSkills = skills.filter((s) => s.name.toLowerCase() === filter)
-          if (targetSkills.length === 0) {
-            dispatch({
-              type: "SHOW_NOTIFICATION",
-              notification: { type: "error", message: `Skill "${source.skillFilter}" not found in "${sourceStr}"` },
-            })
-            return
-          }
-        }
-
-        let installedCount = 0
-
-        for (const skillToInstall of targetSkills) {
-          // Install to all detected agents
-          for (const agent of targetAgents) {
-            const result = await installSkillForAgent(
-              skillToInstall,
-              agent,
-              "global",
-              "symlink",
-            )
-            if (result.success) {
-              installedCount++
-            }
-          }
-
-          // Update lock file
-          await addSkillToLock(sanitizeName(skillToInstall.name), {
-            source: sourceStr,
-            sourceType: source.type,
-            originalUrl: source.url,
-            skillFolderHash: "",
-          })
-        }
-
-        // Trigger refresh
-        dispatch({ type: "REFRESH_SKILLS" })
-
-        const skillNames = targetSkills.map((s) => s.name).join(", ")
-        dispatch({
-          type: "SHOW_NOTIFICATION",
-          notification: {
-            type: "success",
-            message: `Installed ${targetSkills.length} skill(s): ${skillNames} to ${targetAgents.length} agent(s)`,
-          },
-        })
-      } finally {
-        // Clean up temp directory (only if it was a temp clone/download)
-        if (source.type !== "local") {
-          await cleanupTempDir(tmpDir)
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      dispatch({
-        type: "SHOW_NOTIFICATION",
-        notification: { type: "error", message: `Install failed: ${msg}` },
-      })
-    }
-  }, [dispatch])
+  }, [dispatch, settings])
 
   /**
    * Remove a skill from all agents and the lock file.
@@ -366,11 +518,12 @@ export function useSkillActions(): UseSkillActionsResult {
     })
 
     try {
-      const source = parseSource(skill.lock.source)
+      const lockSource = skill.lock.originalUrl || (skill.lock.source.startsWith("github:") ? skill.lock.source.slice(7) : skill.lock.source)
+      const source = parseSource(lockSource)
 
       if (source.type === "github") {
         // Check if the tree SHA has changed
-        const newSha = await fetchTreeSha(source.owner, source.repo, "")
+        const newSha = await fetchTreeSha(source.owner, source.repo, sanitizeName(skill.name))
         if (newSha && newSha === skill.lock.skillFolderHash) {
           dispatch({
             type: "SHOW_NOTIFICATION",
@@ -502,73 +655,33 @@ export function useSkillActions(): UseSkillActionsResult {
 
 // ---------- Helpers ----------
 
-const execAsync = promisify(execCb)
-
 /**
- * Checks if a string matches the owner/repo format (e.g. "vercel/skills").
+ * Resolves the source string for a skill from its metadata or lock entry.
+ * Checks: lock.originalUrl, lock.source, metadata.installCommand, metadata.source, metadata.githubUrl
  */
-function isOwnerRepoFormat(str: string): boolean {
-  return /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(str)
-}
-
-/**
- * Runs `npx skills add <source> --all -y` as a child process to install
- * all skills from a public repository.
- */
-async function runSkillsAdd(
-  source: string,
-  dispatch: (action: Action) => void
-): Promise<void> {
-  try {
-    await execAsync(
-      `npx skills add ${source} --all -y`,
-      { timeout: 60_000 }
-    )
-
-    dispatch({ type: "REFRESH_SKILLS" })
-    dispatch({
-      type: "SHOW_NOTIFICATION",
-      notification: {
-        type: "success",
-        message: `Installed skills from ${source}`,
-      },
-    })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    dispatch({
-      type: "SHOW_NOTIFICATION",
-      notification: { type: "error", message: `Install failed: ${msg}` },
-    })
-  }
-}
-
-/**
- * Resolves the source string for a skill from its metadata.
- * Checks: lock.source, metadata.source, metadata.githubUrl, metadata.installCommand
- */
-function resolveSource(skill: EnrichedSkill): string | null {
+export function resolveSource(skill: EnrichedSkill): string | null {
   // From lock file entry
+  if (skill.lock?.originalUrl) {
+    return skill.lock.originalUrl
+  }
   if (skill.lock?.source) {
-    return skill.lock.source
+    return skill.lock.source.startsWith("github:")
+      ? skill.lock.source.slice(7)
+      : skill.lock.source
   }
 
-  // From metadata (catalog skills -- owner/repo format)
+  // From metadata
   const meta = skill.metadata
+  if (meta?.installCommand && typeof meta.installCommand === "string") {
+    return meta.installCommand.trim()
+  }
+
   if (meta?.source && typeof meta.source === "string") {
-    return meta.source
+    return meta.source.trim()
   }
 
   if (meta?.githubUrl && typeof meta.githubUrl === "string") {
-    return meta.githubUrl
-  }
-
-  // From install command (e.g. "skills add <source>")
-  if (meta?.installCommand && typeof meta.installCommand === "string") {
-    const cmd = meta.installCommand as string
-    const match = cmd.match(/skills?\s+(?:add|install)\s+(.+)/)
-    if (match) {
-      return match[1].trim()
-    }
+    return meta.githubUrl.trim()
   }
 
   return null
