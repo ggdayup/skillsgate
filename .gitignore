@@ -132,5 +132,17 @@ apps/web/*.tsbuildinfo
 .claude/
 .venv/
 .qoder/
+# Python
+__pycache__/
+*.py[cod]
+
 # Machine-local fleet lane placement (herdr-run); never commit.
 .herdr/config/fleet.env
+.herdr/config/dispatch-registry.json
+.herdr/heartbeat/
+.herdr/inbox/
+.herdr/checkpoints/
+.herdr/retry/
+.herdr/*.log
+.herdr/*.heartbeat
+.herdr/*.pid
