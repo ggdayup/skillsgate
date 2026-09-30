@@ -5,7 +5,7 @@ status: completed
 type: bug
 priority: normal
 created_at: 2026-09-29T11:27:28Z
-updated_at: 2026-09-29T11:49:04Z
+updated_at: 2026-09-30T02:31:41Z
 ---
 
 ADR-0008 states the invariant that install sources are parsed, never executed. The desktop paste path honours it; the TUI does not.
@@ -17,3 +17,10 @@ packages/tui/src/data/use-skill-actions.ts:515 runs `npx skills add ${source} --
 - [ ] Remove the execAsync npx path
 - [ ] Behaviour on failure is no worse than today (clear error, no silent partial install)
 - [ ] Typecheck passes
+
+
+## Summary of Changes (Landed)
+- **Bean ID**: `skillsgate-zdbl`
+- **Landed Commit**: `ba073237f6d9ccacdfe760fc3ceff6fad92f7f88`
+- **Reviewer Report**: `.herdr/reports/skillsgate-zdbl-review.md`
+- **Test Gate**: `bun install --ignore-scripts && cd packages/cli && bun run test`
