@@ -21,6 +21,9 @@ cited in the ADR body.
 | [0006](0006-coexist-with-upstream-skills-on-disk.md) | Coexist with upstream `skills` on disk, never compete for its name | Accepted | 2026-09-19 |
 | [0007](0007-shared-local-sqlite-for-cross-surface-state.md) | Shared local SQLite for state common to Desktop and TUI | Accepted | 2026-03-22 |
 | [0008](0008-pasted-install-commands-are-parsed-never-executed.md) | Pasted install commands are parsed, never executed | Accepted | 2026-09-19 |
+| [0009](0009-persistent-github-repo-store.md) | Persistent GitHub repository store under `~/.agents/.store/repos` | Accepted | 2026-09-28 |
+| [0010](0010-core-skill-source-resolution-and-detach-mode.md) | Dynamic Core source resolution via symlink targets and non-destructive Detach mode | Accepted | 2026-09-30 |
+| [0011](0011-skills-library-cold-storage-tier.md) | Skills library cold storage tier (`~/.agents/skills-library`) | Accepted | 2026-09-29 |
 
 ## Creating a new ADR
 
