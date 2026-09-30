@@ -1,11 +1,10 @@
 ---
 # skillsgate-1w5u
 title: 'fix(db): consolidate three drifted SQLite migration sets'
-status: in-progress
+status: todo
 type: bug
-priority: normal
 created_at: 2026-09-29T11:27:28Z
-updated_at: 2026-09-30T00:03:23Z
+updated_at: 2026-09-29T11:27:28Z
 ---
 
 The schema is defined three times and the copies disagree:

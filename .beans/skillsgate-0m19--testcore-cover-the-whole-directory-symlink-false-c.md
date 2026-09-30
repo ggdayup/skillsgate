@@ -1,11 +1,10 @@
 ---
 # skillsgate-0m19
 title: 'test(core): cover the whole-directory-symlink false-conflict guard'
-status: in-progress
+status: todo
 type: task
-priority: normal
 created_at: 2026-09-29T11:27:28Z
-updated_at: 2026-09-30T00:03:23Z
+updated_at: 2026-09-29T11:27:28Z
 ---
 
 ADR-0001 records the false-conflict guard at packages/cli/src/core/core-skills.ts as the invariant that stops all core entries being reported as conflicts when an agent symlinks its entire skills dir at the core dir. The guard has no unit test — it rests on documentation and one observed run. Add regression coverage.
