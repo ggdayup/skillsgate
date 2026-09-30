@@ -25,6 +25,10 @@ const {
   planCoreSync,
   applyCoreSync,
   removeCoreSkill,
+  removeCoreSkills,
+  resolveCoreSources,
+  formatRepoDisplayName,
+  parseGitOriginUrl,
   installDirToCore,
   resolveLocalSkill,
   findDanglingCoreEntries,
@@ -164,6 +168,65 @@ describe("removeCoreSkill", () => {
 
     assert.equal(res.ok, true);
     assert.ok(await exists(outside));
+  });
+});
+
+describe("removeCoreSkills", () => {
+  it("batch removes multiple skills and unlinks them from tools", async () => {
+    const entry1 = await mkCoreEntry("batch-skill-1");
+    const entry2 = await mkCoreEntry("batch-skill-2");
+    const link1 = await linkFromClaude("batch-skill-1", entry1);
+    const link2 = await linkFromClaude("batch-skill-2", entry2);
+
+    const res = await removeCoreSkills(["batch-skill-1", "batch-skill-2"], { mode: "detach" });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.removed, ["batch-skill-1", "batch-skill-2"]);
+    assert.deepEqual(res.failed, []);
+    assert.equal(res.unlinked, 2);
+    assert.equal(await exists(entry1), false);
+    assert.equal(await exists(entry2), false);
+    assert.equal(await exists(link1), false);
+    assert.equal(await exists(link2), false);
+  });
+});
+
+describe("resolveCoreSources", () => {
+  it("correctly identifies git source and subGroup from store repos", async () => {
+    const reposDir = path.join(home, ".agents", ".store", "repos");
+    const repoDir = path.join(reposDir, "cursor-plugins");
+    const gitDir = path.join(repoDir, ".git");
+    await fs.mkdir(gitDir, { recursive: true });
+    await fs.writeFile(
+      path.join(gitDir, "config"),
+      `[remote "origin"]\n\turl = https://github.com/cursor/plugins.git\n`,
+    );
+
+    const pstackSkillDir = path.join(repoDir, "pstack", "skills", "test-pstack-skill");
+    await fs.mkdir(pstackSkillDir, { recursive: true });
+
+    const coreSkillPath = path.join(coreDir, "test-pstack-skill");
+    await fs.symlink(pstackSkillDir, coreSkillPath);
+
+    const entries = [
+      {
+        name: "test-pstack-skill",
+        corePath: coreSkillPath,
+        realPath: await fs.realpath(coreSkillPath),
+      },
+    ];
+
+    try {
+      const sources = await resolveCoreSources(entries);
+      assert.ok(sources["test-pstack-skill"]);
+      assert.equal(sources["test-pstack-skill"].type, "git");
+      assert.equal(sources["test-pstack-skill"].repoName, "cursor-plugins");
+      assert.equal(sources["test-pstack-skill"].repoDisplayName, "cursor/plugins");
+      assert.equal(sources["test-pstack-skill"].subGroup, "pstack");
+      assert.equal(sources["test-pstack-skill"].label, "cursor/plugins / pstack");
+    } finally {
+      await fs.unlink(coreSkillPath).catch(() => undefined);
+    }
   });
 });
 

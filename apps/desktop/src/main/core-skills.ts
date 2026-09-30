@@ -23,9 +23,27 @@ import {
   CORE_SKILLS_DIR,
   SKILL_ROOTS,
   SKILLS_LIBRARY_DIR,
+  STORE_REPOS_DIR,
 } from "./skill-paths"
 
 export type CoreRemoveMode = "detach" | "purge"
+
+export interface CoreSkillSource {
+  type: "git" | "store" | "local-path" | "core-native"
+  repoName?: string
+  repoDisplayName?: string
+  subGroup?: string
+  originUrl?: string
+  sourcePath?: string
+  label: string
+}
+
+export interface CoreBatchRemoveResult {
+  ok: boolean
+  removed: string[]
+  failed: { name: string; error: string }[]
+  unlinked: number
+}
 
 /** Structural subset of ipc-handlers' AgentEntry. */
 export interface CoreAgent {
@@ -803,6 +821,133 @@ export async function removeCoreSkill(
   }
 
   return { ok: true, unlinked, residualCopies, coreEntryMissing }
+}
+
+export async function removeCoreSkills(
+  names: string[],
+  agents: CoreAgent[],
+  options?: { mode?: CoreRemoveMode },
+): Promise<CoreBatchRemoveResult> {
+  const removed: string[] = []
+  const failed: { name: string; error: string }[] = []
+  let totalUnlinked = 0
+
+  for (const name of names) {
+    const res = await removeCoreSkill(name, agents, options)
+    if (res.ok) {
+      removed.push(name)
+      totalUnlinked += res.unlinked
+    } else {
+      failed.push({ name, error: res.error || "Remove failed" })
+    }
+  }
+
+  return {
+    ok: failed.length === 0,
+    removed,
+    failed,
+    unlinked: totalUnlinked,
+  }
+}
+
+export function parseGitOriginUrl(content: string): string {
+  const match = content.match(/\[remote\s+"origin"\][^\[]*?url\s*=\s*([^\r\n]+)/)
+  return match ? match[1].trim() : ""
+}
+
+export function formatRepoDisplayName(originUrl: string, repoName: string): string {
+  if (originUrl) {
+    const clean = originUrl.replace(/\.git$/, "").replace(/^.*github\.com[:/]/, "")
+    if (clean.includes("/")) return clean
+  }
+  if (repoName.includes("-")) {
+    const parts = repoName.split("-")
+    if (parts.length >= 2) {
+      return `${parts[0]}/${parts.slice(1).join("-")}`
+    }
+  }
+  return repoName
+}
+
+export async function resolveCoreSources(
+  entries: CoreEntry[],
+): Promise<Record<string, CoreSkillSource>> {
+  const repoCache = new Map<string, { displayName: string; originUrl: string }>()
+
+  async function getRepoMeta(repoName: string) {
+    if (repoCache.has(repoName)) return repoCache.get(repoName)!
+    const repoDir = path.join(STORE_REPOS_DIR, repoName)
+    const cfgPath = path.join(repoDir, ".git", "config")
+    let originUrl = ""
+    try {
+      const content = await fs.readFile(cfgPath, "utf-8")
+      originUrl = parseGitOriginUrl(content)
+    } catch {}
+    const displayName = formatRepoDisplayName(originUrl, repoName)
+    const meta = { displayName, originUrl }
+    repoCache.set(repoName, meta)
+    return meta
+  }
+
+  const rawReposDir = STORE_REPOS_DIR
+  const rawCanonicalDir = CANONICAL_SKILLS_DIR
+  const rawCoreDir = CORE_SKILLS_DIR
+  const reposDir = await realpathOrResolve(rawReposDir)
+  const canonicalDir = await realpathOrResolve(rawCanonicalDir)
+  const coreDir = await realpathOrResolve(rawCoreDir)
+
+  const out: Record<string, CoreSkillSource> = {}
+  for (const entry of entries) {
+    const real = entry.realPath
+    const isGit = real.startsWith(reposDir + path.sep) || real.startsWith(rawReposDir + path.sep)
+    const isStore = real.startsWith(canonicalDir + path.sep) || real.startsWith(rawCanonicalDir + path.sep)
+    const isCore =
+      real.startsWith(coreDir + path.sep) ||
+      real === coreDir ||
+      real.startsWith(rawCoreDir + path.sep) ||
+      real === rawCoreDir
+
+    if (isGit) {
+      const baseDir = real.startsWith(reposDir + path.sep) ? reposDir : rawReposDir
+      const rel = path.relative(baseDir, real)
+      const parts = rel.split(path.sep)
+      const repoName = parts[0]
+      const subParts = parts.slice(1)
+      let subGroup: string | undefined = undefined
+      if (subParts.length >= 2 && subParts[1] === "skills") {
+        subGroup = subParts[0]
+      } else if (subParts.length >= 1 && subParts[0] !== "skills") {
+        subGroup = subParts[0]
+      }
+      const meta = await getRepoMeta(repoName)
+      const label = subGroup ? `${meta.displayName} / ${subGroup}` : meta.displayName
+      out[entry.name] = {
+        type: "git",
+        repoName,
+        repoDisplayName: meta.displayName,
+        subGroup,
+        originUrl: meta.originUrl,
+        label,
+      }
+    } else if (isStore) {
+      out[entry.name] = {
+        type: "store",
+        label: "Store",
+      }
+    } else if (isCore) {
+      out[entry.name] = {
+        type: "core-native",
+        label: "Core (Native)",
+      }
+    } else {
+      out[entry.name] = {
+        type: "local-path",
+        sourcePath: real,
+        label: "Local Path",
+      }
+    }
+  }
+  return out
 }
 
 export async function promoteToCore(

@@ -153,30 +153,37 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
   )
 }
 
-interface RemoveCoreSkillDialogProps {
-  skillName: string
+interface RemoveCoreSkillsDialogProps {
+  skillNames: string[]
   busy: boolean
   onClose: () => void
   onConfirm: (mode: "detach" | "purge") => Promise<void>
 }
 
-function RemoveCoreSkillDialog({
-  skillName,
+function RemoveCoreSkillsDialog({
+  skillNames,
   busy,
   onClose,
   onConfirm,
-}: RemoveCoreSkillDialogProps) {
+}: RemoveCoreSkillsDialogProps) {
   const [mode, setMode] = useState<"detach" | "purge">("detach")
+  const isMultiple = skillNames.length > 1
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
       <div className="w-full max-w-lg rounded-2xl border border-border bg-surface p-6 shadow-2xl">
         <h3 className="text-lg font-bold text-foreground mb-1">
-          {t("Remove core skill")}
+          {isMultiple ? t("Remove core skills in batch") : t("Remove core skill")}
         </h3>
         <p className="text-[12px] text-muted mb-4">
-          <span className="font-semibold text-foreground mr-1.5">{skillName}.</span>
-          <span>{t("Choose how you want to handle this skill and its underlying files.")}</span>
+          <span className="font-semibold text-foreground mr-1.5">
+            {isMultiple ? `${skillNames.length} ${t("skills")}` : `${skillNames[0]}.`}
+          </span>
+          <span>
+            {isMultiple
+              ? t("Choose how you want to handle these skills and their underlying files.")
+              : t("Choose how you want to handle this skill and its underlying files.")}
+          </span>
         </p>
 
         <div className="space-y-2.5 text-[12px] text-foreground mb-5">
@@ -225,9 +232,13 @@ function RemoveCoreSkillDialog({
                 {t("Delete completely from disk")}
               </span>
               <span className="text-[11px] text-muted block mt-0.5">
-                {t(
-                  "Permanently deletes this skill from Core, Store, skills library, and all tool directories. This action cannot be undone.",
-                )}
+                {isMultiple
+                  ? t(
+                      "Permanently deletes these skills from Core, Store, skills library, and all tool directories. This action cannot be undone.",
+                    )
+                  : t(
+                      "Permanently deletes this skill from Core, Store, skills library, and all tool directories. This action cannot be undone.",
+                    )}
               </span>
             </div>
           </label>
@@ -252,7 +263,13 @@ function RemoveCoreSkillDialog({
                 : "bg-primary hover:bg-primary/90"
             }`}
           >
-            {mode === "purge" ? t("Delete permanently") : t("Remove from Core")}
+            {mode === "purge"
+              ? isMultiple
+                ? `${t("Delete permanently")} (${skillNames.length})`
+                : t("Delete permanently")
+              : isMultiple
+              ? `${t("Remove from Core")} (${skillNames.length})`
+              : t("Remove from Core")}
           </button>
         </div>
       </div>
@@ -273,8 +290,10 @@ export function Core() {
   const [openTool, setOpenTool] = useState<string | null>(null)
   const [openSkill, setOpenSkill] = useState<string | null>(null)
   const [query, setQuery] = useState("")
-  // Modal target for core skill removal (detach vs purge)
-  const [removeTargetSkill, setRemoveTargetSkill] = useState<string | null>(null)
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState("all")
+  const [selectedSkillNames, setSelectedSkillNames] = useState<Set<string>>(new Set())
+  // Target skills for removal (single or batch)
+  const [removeTargetSkills, setRemoveTargetSkills] = useState<string[] | null>(null)
   const [confirmReplace, setConfirmReplace] = useState<string | null>(null)
   // Row actions happen far below the header card, so their failure has to be
   // rendered next to the row — a header-only banner reads as "nothing happened".
@@ -319,11 +338,88 @@ export function Core() {
     [items, list?.skills],
   )
 
+  const sources = useMemo(() => list?.sources ?? {}, [list?.sources])
+
+  interface SourceOption {
+    value: string
+    label: string
+    count: number
+  }
+
+  const sourceOptions = useMemo(() => {
+    const countsByGroup = new Map<string, number>()
+    const countsByRepo = new Map<string, number>()
+    const countsByType = new Map<string, number>()
+
+    for (const src of Object.values(sources)) {
+      countsByGroup.set(src.label, (countsByGroup.get(src.label) || 0) + 1)
+      if (src.type === "git" && src.repoDisplayName) {
+        countsByRepo.set(src.repoDisplayName, (countsByRepo.get(src.repoDisplayName) || 0) + 1)
+      } else {
+        countsByType.set(src.type, (countsByType.get(src.type) || 0) + 1)
+      }
+    }
+
+    const options: SourceOption[] = [
+      { value: "all", label: `${t("All sources")} (${list?.count ?? 0})`, count: list?.count ?? 0 },
+    ]
+
+    const sortedRepos = [...countsByRepo.keys()].sort()
+    for (const repo of sortedRepos) {
+      const repoCount = countsByRepo.get(repo) || 0
+      options.push({
+        value: `repo:${repo}`,
+        label: `${repo} (${repoCount})`,
+        count: repoCount,
+      })
+
+      for (const [label, count] of countsByGroup.entries()) {
+        if (label.startsWith(`${repo} / `)) {
+          options.push({
+            value: `label:${label}`,
+            label: `  ↳ ${label} (${count})`,
+            count,
+          })
+        }
+      }
+    }
+
+    if (countsByType.has("store")) {
+      const count = countsByType.get("store")!
+      options.push({ value: "type:store", label: `${t("Store")} (${count})`, count })
+    }
+    if (countsByType.has("core-native")) {
+      const count = countsByType.get("core-native")!
+      options.push({ value: "type:core-native", label: `${t("Core (Native)")} (${count})`, count })
+    }
+    if (countsByType.has("local-path")) {
+      const count = countsByType.get("local-path")!
+      options.push({ value: "type:local-path", label: `${t("Local Path")} (${count})`, count })
+    }
+
+    return options
+  }, [sources, list?.count])
+
   const visibleSkills = useMemo(() => {
+    let result = fanout
     const q = query.trim().toLowerCase()
-    if (!q) return fanout
-    return fanout.filter((entry) => entry.name.toLowerCase().includes(q))
-  }, [fanout, query])
+    if (q) {
+      result = result.filter((entry) => entry.name.toLowerCase().includes(q))
+    }
+    if (selectedSourceFilter !== "all") {
+      if (selectedSourceFilter.startsWith("repo:")) {
+        const repo = selectedSourceFilter.slice(5)
+        result = result.filter((entry) => sources[entry.name]?.repoDisplayName === repo)
+      } else if (selectedSourceFilter.startsWith("label:")) {
+        const label = selectedSourceFilter.slice(6)
+        result = result.filter((entry) => sources[entry.name]?.label === label)
+      } else if (selectedSourceFilter.startsWith("type:")) {
+        const type = selectedSourceFilter.slice(5)
+        result = result.filter((entry) => sources[entry.name]?.type === type)
+      }
+    }
+    return result
+  }, [fanout, query, selectedSourceFilter, sources])
 
   const actionable = counts.link + counts.unlink
 
@@ -695,20 +791,101 @@ export function Core() {
 
         {/* ---- per-skill ---- */}
         <div className="rounded-2xl border border-border bg-surface p-5">
-          <div className="flex items-center justify-between gap-3 mb-1 flex-wrap">
-            <h3 className="text-[13px] font-semibold text-foreground">
-              {t("Core skills")}
-            </h3>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("Filter skills...")}
-              className="w-56 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] text-foreground"
-            />
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <div>
+              <h3 className="text-[13px] font-semibold text-foreground">
+                {t("Core skills")}
+              </h3>
+              <p className="text-[12px] text-muted mt-0.5">
+                {t("Fan-out per skill. Excluding a skill removes it from one tool without touching the core set.")}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Source filter dropdown */}
+              <select
+                value={selectedSourceFilter}
+                onChange={(e) => {
+                  setSelectedSourceFilter(e.target.value)
+                  setSelectedSkillNames(new Set())
+                }}
+                className="rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] text-foreground focus:outline-none focus:border-foreground/40 max-w-[260px] truncate"
+                title={t("Filter by source")}
+              >
+                {sourceOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+
+              {/* Search input */}
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t("Filter skills...")}
+                className="w-48 rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] text-foreground focus:outline-none focus:border-foreground/40"
+              />
+            </div>
           </div>
-          <p className="text-[12px] text-muted mb-4">
-            {t("Fan-out per skill. Excluding a skill removes it from one tool without touching the core set.")}
-          </p>
+
+          {/* Batch operations toolbar */}
+          <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-border bg-background mb-3 text-[12px]">
+            <div className="flex items-center gap-2.5">
+              <input
+                type="checkbox"
+                checked={visibleSkills.length > 0 && visibleSkills.every((s) => selectedSkillNames.has(s.name))}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    setSelectedSkillNames(new Set(visibleSkills.map((s) => s.name)))
+                  } else {
+                    setSelectedSkillNames(new Set())
+                  }
+                }}
+                disabled={visibleSkills.length === 0}
+                className="rounded border-border text-primary focus:ring-0 cursor-pointer"
+                title={t("Select all visible")}
+              />
+              <span className="text-muted">
+                {selectedSkillNames.size > 0 ? (
+                  <span className="font-medium text-foreground">
+                    {t("Selected")} {selectedSkillNames.size} / {visibleSkills.length}
+                  </span>
+                ) : (
+                  <span>
+                    {t("Showing")} {visibleSkills.length} {t("skills")}
+                  </span>
+                )}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {selectedSkillNames.size > 0 ? (
+                <>
+                  <button
+                    onClick={() => setSelectedSkillNames(new Set())}
+                    className="text-muted hover:text-foreground px-2 py-1 text-[11px]"
+                  >
+                    {t("Clear selection")}
+                  </button>
+                  <button
+                    onClick={() => setRemoveTargetSkills([...selectedSkillNames])}
+                    disabled={busy !== null}
+                    className="rounded-lg bg-red-600 px-3 py-1 text-[11px] font-medium text-white hover:bg-red-700 disabled:opacity-40"
+                  >
+                    {t("Batch remove from Core")} ({selectedSkillNames.size})
+                  </button>
+                </>
+              ) : selectedSourceFilter !== "all" && visibleSkills.length > 0 ? (
+                <button
+                  onClick={() => setRemoveTargetSkills(visibleSkills.map((s) => s.name))}
+                  disabled={busy !== null}
+                  className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1 text-[11px] font-medium text-red-600 hover:bg-red-500/20 disabled:opacity-40"
+                >
+                  {t("Remove all from this source")} ({visibleSkills.length})
+                </button>
+              ) : null}
+            </div>
+          </div>
 
           <div className="flex flex-col gap-2">
             {visibleSkills.length === 0 ? (
@@ -721,6 +898,7 @@ export function Core() {
               visibleSkills.map((skill) => {
                 const open = openSkill === skill.name
                 const total = status.length
+                const skillSource = sources[skill.name]
                 return (
                   <div
                     key={skill.name}
@@ -731,15 +909,34 @@ export function Core() {
                     }`}
                   >
                     <div className="flex items-center gap-3 px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedSkillNames.has(skill.name)}
+                        onChange={(e) => {
+                          const next = new Set(selectedSkillNames)
+                          if (e.target.checked) next.add(skill.name)
+                          else next.delete(skill.name)
+                          setSelectedSkillNames(next)
+                        }}
+                        className="rounded border-border text-primary focus:ring-0 cursor-pointer"
+                      />
                       <button
                         onClick={() => setOpenSkill(open ? null : skill.name)}
-                        className="flex items-center gap-3 flex-1 text-left"
+                        className="flex items-center gap-3 flex-1 text-left min-w-0"
                       >
-                        <span className="text-[13px] text-foreground font-mono">
+                        <span className="text-[13px] text-foreground font-mono shrink-0">
                           {skill.name}
                         </span>
+                        {skillSource && (
+                          <span
+                            className="text-[10px] font-mono px-2 py-0.5 rounded border border-border/80 bg-surface/80 text-muted truncate max-w-[220px]"
+                            title={skillSource.label}
+                          >
+                            {skillSource.label}
+                          </span>
+                        )}
                         <span
-                          className="text-[12px] font-mono text-muted"
+                          className="text-[12px] font-mono text-muted shrink-0"
                           style={{ fontVariantNumeric: "tabular-nums" }}
                         >
                           {skill.linked}/{total}
@@ -780,7 +977,7 @@ export function Core() {
                       ) : (
                         <button
                           disabled={busy !== null}
-                          onClick={() => setRemoveTargetSkill(skill.name)}
+                          onClick={() => setRemoveTargetSkills([skill.name])}
                           className="rounded-md border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-40 hover:text-red-600 hover:border-red-200"
                           title={t("Remove from the core set and unlink everywhere")}
                         >
@@ -854,18 +1051,22 @@ export function Core() {
         </div>
       </div>
 
-      {removeTargetSkill && (
-        <RemoveCoreSkillDialog
-          skillName={removeTargetSkill}
+      {removeTargetSkills && removeTargetSkills.length > 0 && (
+        <RemoveCoreSkillsDialog
+          skillNames={removeTargetSkills}
           busy={busy !== null}
-          onClose={() => setRemoveTargetSkill(null)}
+          onClose={() => setRemoveTargetSkills(null)}
           onConfirm={async (mode) => {
-            const skillName = removeTargetSkill
-            setRemoveTargetSkill(null)
-            await runRow(
-              () => electronAPI.coreRemove(skillName, mode),
-              `skill:${skillName}`,
-            )
+            const targets = removeTargetSkills
+            setRemoveTargetSkills(null)
+            await runRow(async () => {
+              if (targets.length === 1) {
+                await electronAPI.coreRemove(targets[0], mode)
+              } else {
+                await electronAPI.coreBatchRemove(targets, mode)
+              }
+              setSelectedSkillNames(new Set())
+            }, `batch-remove:${targets.length}`)
           }}
         />
       )}

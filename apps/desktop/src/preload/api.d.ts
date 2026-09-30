@@ -106,6 +106,23 @@ declare global {
     conflicts: number
   }
 
+  interface CoreSkillSource {
+    type: "git" | "store" | "local-path" | "core-native"
+    repoName?: string
+    repoDisplayName?: string
+    subGroup?: string
+    originUrl?: string
+    sourcePath?: string
+    label: string
+  }
+
+  interface CoreBatchRemoveResult {
+    ok: boolean
+    removed: string[]
+    failed: { name: string; error: string }[]
+    unlinked: number
+  }
+
   interface CoreListResult {
     coreDir: string
     storeDir: string
@@ -114,6 +131,7 @@ declare global {
     exclusions: Record<string, string[]>
     /** Core entries that are symlinks whose target no longer exists. */
     danglingEntries: { name: string; pointsTo: string }[]
+    sources?: Record<string, CoreSkillSource>
   }
 
   interface CoreInstallOptions {
@@ -331,6 +349,10 @@ declare global {
       residualCopies: string[]
       coreEntryMissing: boolean
     }>
+    coreBatchRemove: (
+      skillNames: string[],
+      mode?: "detach" | "purge",
+    ) => Promise<CoreBatchRemoveResult>
     coreSetExclusion: (
       agentName: string,
       skillName: string,

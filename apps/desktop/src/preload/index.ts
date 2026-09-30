@@ -83,6 +83,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("core:promote", skillName, agentName),
   coreRemove: (skillName: string, mode?: "detach" | "purge") =>
     ipcRenderer.invoke("core:remove", skillName, mode),
+  coreBatchRemove: (skillNames: string[], mode?: "detach" | "purge") =>
+    ipcRenderer.invoke("core:batch-remove", skillNames, mode),
   coreSetExclusion: (agentName: string, skillName: string, excluded: boolean) =>
     ipcRenderer.invoke("core:set-exclusion", agentName, skillName, excluded),
   coreReplaceConflict: (skillName: string, agentName: string) =>

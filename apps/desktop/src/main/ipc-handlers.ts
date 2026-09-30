@@ -53,6 +53,8 @@ import {
   promoteToCore,
   readCoreConfig,
   removeCoreSkill,
+  removeCoreSkills,
+  resolveCoreSources,
   replaceConflictWithCoreLink,
   setExclusion,
   type CoreAgent,
@@ -2677,6 +2679,7 @@ Add your skill instructions here.
   ipcMain.handle("core:list", async () => {
     const entries = await listCoreEntries()
     const cfg = await readCoreConfig()
+    const sources = await resolveCoreSources(entries)
     return {
       coreDir: CORE_SKILLS_DIR,
       storeDir: CANONICAL_SKILLS_DIR,
@@ -2684,6 +2687,7 @@ Add your skill instructions here.
       skills: entries.map((e) => e.name),
       exclusions: cfg.exclusions,
       danglingEntries: await findDanglingCoreEntries(),
+      sources,
     }
   })
 
@@ -2718,6 +2722,29 @@ Add your skill instructions here.
         const lock = await readSkillLock()
         if (lock.skills[safeName]) {
           delete lock.skills[safeName]
+          await writeSkillLock(lock)
+        }
+      }
+      await rescanAndCache().catch(() => undefined)
+      return res
+    },
+  )
+
+  ipcMain.handle(
+    "core:batch-remove",
+    async (_e, skillNames: string[], mode?: CoreRemoveMode) => {
+      const res = await removeCoreSkills(skillNames, await getCoreAgents(), { mode })
+      if (mode === "purge") {
+        const lock = await readSkillLock()
+        let lockDirty = false
+        for (const skillName of res.removed) {
+          const safeName = sanitizeName(skillName)
+          if (lock.skills[safeName]) {
+            delete lock.skills[safeName]
+            lockDirty = true
+          }
+        }
+        if (lockDirty) {
           await writeSkillLock(lock)
         }
       }
