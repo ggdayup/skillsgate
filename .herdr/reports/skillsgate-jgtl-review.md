@@ -4,6 +4,32 @@
 - **Reviewer**: Lead (Antigravity)
 - **Harnesses Reviewed**: `antigravity`, `codebuddy`, `workbuddy`, `workbuddy-ai`, `trae-cn`, `pi`, `mercury`
 - **Base Commit**: 178159dc465ce5ff9e9d8cc159145036568a189e (origin/main)
+- **Reviewed Head**: `5ebbf86` on `feat/support-more-coding-agents` (added 2026-10-04)
+
+> **Correction (2026-10-04).** This report originally named only the base commit
+> `178159dc`, which was `origin/main` at rebase time — **not** the object under
+> review. That sha predates the work by three days (2026-09-08 vs `bd97b8b` on
+> 2026-09-11) and contains none of the seven harnesses, so it cannot be the
+> subject. The subject was the five-commit branch `feat/support-more-coding-agents`,
+> head `5ebbf86`. The bean brief `.herdr/briefs/skillsgate-jgtl.md` cites a third,
+> also-correct value, `d38dca1` ("chore(beans): add skillsgate-jgtl"), which is
+> the dispatch point. Three shas, three different meanings, none of them labelled.
+>
+> Branch commits reviewed, and where each ended up:
+>
+> | Commit | Subject | In `main` as |
+> | --- | --- | --- |
+> | `963c496` | feat(harnesses): add 7 coding agent harnesses | superseded by `bd97b8b` |
+> | `4d3eba4` | test(cli): add unit tests for agent registry | `packages/cli/src/core/agents.test.ts` present; patch not equivalent |
+> | `d7d02b1` | docs: update README to 27 supported agents | superseded — README now says 33 |
+> | `48397f7` | fix(codebuddy): detection and renderer alias | `12ba377` |
+> | `5ebbf86` | feat(codebuddy): split CodeBuddy / CodeBuddy CN | `35f8488` |
+>
+> The branch was never merged and `feat/support-more-coding-agents` is still
+> unmerged, but its content reached `main` by other routes. As with
+> `skillsgate-83ay`, the APPROVE verdict below was correct at the time and is not
+> clearance to land the branch now — two of its five commits were superseded by
+> later work on `main` that this review did not see.
 
 ---
 
@@ -45,6 +71,11 @@ A clean branch `feat/support-more-coding-agents` rebased cleanly on `origin/main
 
 ## 3. Strict Verdict
 
+```
 BEAN: MET
 LANDABLE: YES
 VERDICT: APPROVE
+```
+
+Correct as a review of `5ebbf86` / `feat/support-more-coding-agents` at the time.
+The branch itself was never landed — see the correction note at the top.
