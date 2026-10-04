@@ -4,7 +4,9 @@
 - **Reviewer**: Lead (Antigravity)
 - **Harnesses Reviewed**: `antigravity`, `codebuddy`, `workbuddy`, `workbuddy-ai`, `trae-cn`, `pi`, `mercury`
 - **Base Commit**: 178159dc465ce5ff9e9d8cc159145036568a189e (origin/main)
-- **Reviewed Head**: `5ebbf86` on `feat/support-more-coding-agents` (added 2026-10-04)
+- **Reviewed Head**: `5ebbf86` on `feat/support-more-coding-agents` — branch deleted
+  2026-10-04, pinned as `fleet-drop/skillsgate-jgtl`, remote copy kept at
+  `fork/feat/support-more-coding-agents`
 
 > **Correction (2026-10-04).** This report originally named only the base commit
 > `178159dc`, which was `origin/main` at rebase time — **not** the object under
@@ -25,11 +27,17 @@
 > | `48397f7` | fix(codebuddy): detection and renderer alias | `12ba377` |
 > | `5ebbf86` | feat(codebuddy): split CodeBuddy / CodeBuddy CN | `35f8488` |
 >
-> The branch was never merged and `feat/support-more-coding-agents` is still
-> unmerged, but its content reached `main` by other routes. As with
-> `skillsgate-83ay`, the APPROVE verdict below was correct at the time and is not
-> clearance to land the branch now — two of its five commits were superseded by
-> later work on `main` that this review did not see.
+> The branch was never merged. Its content reached `main` by other routes, and the
+> local branch was deleted on 2026-10-04 rather than merged, because a merge is
+> strictly harmful here: the branch's 28 agents are a **subset** of the 33 in
+> `main` (zero agents to gain), and the merge conflicts on `README.md`, where
+> resolving toward the branch would regress the advertised count from 33 to 28.
+> Pinned as `fleet-drop/skillsgate-jgtl`; recover with
+> `git branch feat/support-more-coding-agents fleet-drop/skillsgate-jgtl`.
+>
+> As with `skillsgate-83ay`, the APPROVE verdict below was correct at the time
+> and is not clearance to land the branch now — two of its five commits were
+> superseded by later work on `main` that this review did not see.
 
 ---
 
