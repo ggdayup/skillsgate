@@ -1,13 +1,13 @@
 ---
 # skillsgate-wzqu
 title: 'Tracked GitHub sources: proactive update discovery and prompting'
-status: in-progress
+status: completed
 type: feature
 priority: normal
 tags:
     - ready-for-agent
 created_at: 2026-10-05T00:50:25Z
-updated_at: 2026-10-05T03:34:29Z
+updated_at: 2026-10-05T03:34:39Z
 ---
 
 ## Problem Statement
@@ -81,3 +81,7 @@ The app proactively discovers upstream updates for tracked GitHub sources and pr
 - [x] Preload + api.d.ts：桥接类型与方法
 - [x] Renderer：Sources 页 badge、单卡标记、last-checked 文案；i18n
 - [x] typecheck 通过；按 spec 补行为测试
+
+## Summary of Changes
+
+Implemented in 242723f (8 files, +633/-4). Read-only ls-remote check behind git-sources:check-updates; 24h quiet-window (03:00-05:00) scheduler with idle guard; toolbar badge + last-checked + per-repo markers; 11 new behavior tests (30/30 pass); tsc node+web clean; i18n:check 0 missing; electron-vite build passes. Out of scope per spec: auto-pull, OS notifications, per-skill diffs.
