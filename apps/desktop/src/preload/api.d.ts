@@ -252,12 +252,38 @@ declare global {
     error?: string
   }
 
+  /**
+   * One frame of `git-sources:refresh` progress, pushed from main while the
+   * refresh runs. `startedAt` is a Date.now() stamp so the renderer can show a
+   * live elapsed timer without having to guess when the refresh began.
+   */
+  interface GitRefreshProgress {
+    phase: "starting" | "pulling" | "scanning" | "done" | "error"
+    /** Repo currently being pulled; absent during the initial and scanning phases. */
+    repoName?: string
+    /** 1-based position of repoName within the repos being pulled. */
+    index?: number
+    /** How many repos the pulling phase will visit. */
+    total?: number
+    startedAt: number
+    message?: string
+  }
+
   interface ElectronAPI {
     // Git Sources
     gitSourcesList: () => Promise<GitRepoSummary[]>
     gitSourcesAdd: (url: string) => Promise<{ ok: boolean; repo?: GitRepoSummary; error?: string }>
     gitSourcesPull: (repoName: string) => Promise<GitRepoSyncResult>
-    gitSourcesPullAll: () => Promise<Record<string, GitRepoSyncResult>>
+    /**
+     * Pulls every tracked repo, then re-reads them. Returns the fresh list plus
+     * the per-repo sync outcome, so the renderer never needs a second round trip
+     * to know what changed. Progress arrives via `onGitSourcesProgress`.
+     */
+    gitSourcesRefresh: () => Promise<{
+      repos: GitRepoSummary[]
+      sync: Record<string, GitRepoSyncResult>
+    }>
+    onGitSourcesProgress: (callback: (progress: GitRefreshProgress) => void) => () => void
     gitSourcesRemove: (
       repoName: string,
       action: "unlink" | "detach" | "keep-links",

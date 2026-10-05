@@ -1699,6 +1699,150 @@ function buildCliEnv(): NodeJS.ProcessEnv {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Git sources (~/.agents/.store/repos)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads every tracked repo under the persistent store: git metadata, the dirty
+ * flag, and a rediscovered skill list annotated with where each skill is
+ * installed. Split out of the `git-sources:list` handler so `git-sources:refresh`
+ * can re-run exactly the same read after its pulls without a second IPC hop.
+ */
+async function listGitRepoSummaries(): Promise<GitRepoSummary[]> {
+  if (!(await dirExists(STORE_REPOS_DIR))) {
+    return []
+  }
+
+  const entries = await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true })
+  const repos: GitRepoSummary[] = []
+  const detected = await detectAgents()
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const repoDir = path.join(STORE_REPOS_DIR, entry.name)
+    const gitDir = path.join(repoDir, ".git")
+    if (!(await dirExists(gitDir))) continue
+
+    const originUrl = await getGitOriginUrl(repoDir)
+    const branch = await getGitBranch(repoDir)
+    const commitLog = await getGitLatestLog(repoDir)
+    const commit = commitLog?.hash || (await getGitCommit(repoDir))
+    const commitMessage = commitLog?.message || ""
+    const commitDate = commitLog?.date || ""
+    const dirty = await isGitDirty(repoDir)
+    const displayName = getRepoDisplayName(originUrl, entry.name)
+
+    // Discover skills inside this repo
+    const unreadable: string[] = []
+    const discovered = await discoverSkillsInDir(repoDir, 0, 5, unreadable)
+    const skills: GitRepoSkillSummary[] = []
+
+    for (const skill of discovered) {
+      const skillDir = path.dirname(skill.filePath)
+      const subPath = path.relative(repoDir, skillDir)
+      const skillReal = await realpathOrResolve(skillDir)
+
+      // Check Core (~/.agents/skills/{skillName})
+      const safeName = sanitizeName(skill.name)
+      const coreSkillPath = path.join(CORE_SKILLS_DIR, safeName)
+      let isCoreInstalled = false
+      if (await pathExists(coreSkillPath)) {
+        try {
+          const coreReal = await realpathOrResolve(coreSkillPath)
+          if (coreReal === skillReal) {
+            isCoreInstalled = true
+          }
+        } catch {}
+      }
+
+      // Check installed agents
+      const installedAgents: string[] = []
+      for (const agent of detected) {
+        const regAgent = agentRegistry[agent.name]
+        if (!regAgent) continue
+        const agentSkillPath = path.join(regAgent.globalSkillsDir, safeName)
+        if (await pathExists(agentSkillPath)) {
+          try {
+            const agentReal = await realpathOrResolve(agentSkillPath)
+            if (agentReal === skillReal) {
+              installedAgents.push(agent.displayName)
+            }
+          } catch {}
+        }
+      }
+
+      skills.push({
+        name: skill.name,
+        description: skill.description ?? "",
+        subPath,
+        isCoreInstalled,
+        installedAgents,
+      })
+    }
+
+    repos.push({
+      name: entry.name,
+      displayName,
+      path: repoDir,
+      originUrl,
+      branch,
+      commit,
+      commitMessage,
+      commitDate,
+      isDirty: dirty,
+      skills,
+    })
+  }
+
+  repos.sort((a, b) => a.displayName.localeCompare(b.displayName))
+  return repos
+}
+
+/**
+ * Pulls every tracked repo in turn, announcing each one *before* starting it so
+ * the renderer can show which repo a slow refresh is currently blocked on.
+ * Dirty repos are skipped by `syncGitRepo` rather than force-pulled, so a
+ * failed pull on one repo never aborts the rest.
+ */
+async function syncAllGitRepos(
+  onRepoStart?: (repoName: string, index: number, total: number) => void,
+): Promise<Record<string, GitRepoSyncResult>> {
+  const results: Record<string, GitRepoSyncResult> = {}
+  if (!(await dirExists(STORE_REPOS_DIR))) return results
+
+  const candidates = (await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true }))
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+
+  // Resolve the git repos up front so `total` matches the count the renderer
+  // already shows. Counting every directory would include leftovers without a
+  // `.git`, making the progress read "(3/6)" on a page that says 5 repos.
+  const repoNames: string[] = []
+  for (const name of candidates) {
+    if (await dirExists(path.join(STORE_REPOS_DIR, name, ".git"))) repoNames.push(name)
+  }
+
+  for (const [i, name] of repoNames.entries()) {
+    const repoDir = path.join(STORE_REPOS_DIR, name)
+    onRepoStart?.(name, i + 1, repoNames.length)
+    results[name] = await syncGitRepo(repoDir)
+  }
+
+  return results
+}
+
+/**
+ * Pushes one frame of refresh progress to the Sources page. Without this the
+ * refresh is a single opaque await that can take seconds, and the only visible
+ * change is a spinning icon that looks identical before and after.
+ */
+function broadcastGitRefresh(progress: GitRefreshProgress): void {
+  if (!_mainWindow || _mainWindow.isDestroyed()) return
+  _mainWindow.webContents.send("git-sources:progress", progress)
+}
+
 export function registerIpcHandlers(): void {
   console.log("[ipc] registerIpcHandlers initialized")
   // Detect which agents are installed on this machine
@@ -2794,94 +2938,56 @@ Add your skill instructions here.
   // -------------------------------------------------------------------------
 
   ipcMain.handle("git-sources:list", async (): Promise<GitRepoSummary[]> => {
-    if (!(await dirExists(STORE_REPOS_DIR))) {
-      return []
-    }
+    return listGitRepoSummaries()
+  })
 
-    const entries = await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true })
-    const repos: GitRepoSummary[] = []
-    const detected = await detectAgents()
+  ipcMain.handle(
+    "git-sources:refresh",
+    async (): Promise<{ repos: GitRepoSummary[]; sync: Record<string, GitRepoSyncResult> }> => {
+      const startedAt = Date.now()
+      broadcastGitRefresh({ phase: "starting", startedAt })
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const repoDir = path.join(STORE_REPOS_DIR, entry.name)
-      const gitDir = path.join(repoDir, ".git")
-      if (!(await dirExists(gitDir))) continue
-
-      const originUrl = await getGitOriginUrl(repoDir)
-      const branch = await getGitBranch(repoDir)
-      const commitLog = await getGitLatestLog(repoDir)
-      const commit = commitLog?.hash || (await getGitCommit(repoDir))
-      const commitMessage = commitLog?.message || ""
-      const commitDate = commitLog?.date || ""
-      const dirty = await isGitDirty(repoDir)
-      const displayName = getRepoDisplayName(originUrl, entry.name)
-
-      // Discover skills inside this repo
-      const unreadable: string[] = []
-      const discovered = await discoverSkillsInDir(repoDir, 0, 5, unreadable)
-      const skills: GitRepoSkillSummary[] = []
-
-      for (const skill of discovered) {
-        const skillDir = path.dirname(skill.filePath)
-        const subPath = path.relative(repoDir, skillDir)
-        const skillReal = await realpathOrResolve(skillDir)
-
-        // Check Core (~/.agents/skills/{skillName})
-        const safeName = sanitizeName(skill.name)
-        const coreSkillPath = path.join(CORE_SKILLS_DIR, safeName)
-        let isCoreInstalled = false
-        if (await pathExists(coreSkillPath)) {
-          try {
-            const coreReal = await realpathOrResolve(coreSkillPath)
-            if (coreReal === skillReal) {
-              isCoreInstalled = true
-            }
-          } catch {}
-        }
-
-        // Check installed agents
-        const installedAgents: string[] = []
-        for (const agent of detected) {
-          const regAgent = agentRegistry[agent.name]
-          if (!regAgent) continue
-          const agentSkillPath = path.join(regAgent.globalSkillsDir, safeName)
-          if (await pathExists(agentSkillPath)) {
-            try {
-              const agentReal = await realpathOrResolve(agentSkillPath)
-              if (agentReal === skillReal) {
-                installedAgents.push(agent.displayName)
-              }
-            } catch {}
-          }
-        }
-
-        skills.push({
-          name: skill.name,
-          description: skill.description ?? "",
-          subPath,
-          isCoreInstalled,
-          installedAgents,
+      // Phase 1 — pull every tracked repo. `git pull --ff-only` fetches as part of
+      // the pull, so there is no separate fetch step to stream.
+      let sync: Record<string, GitRepoSyncResult>
+      try {
+        sync = await syncAllGitRepos((repoName, index, total) => {
+          broadcastGitRefresh({ phase: "pulling", repoName, index, total, startedAt })
         })
+      } catch (err) {
+        console.error("[git-sources] refresh failed:", err)
+        // Without this the renderer sits on "Refreshing..." forever: the invoke
+        // rejects, but only a broadcast can clear the in-progress UI.
+        const message = err instanceof Error ? err.message : String(err)
+        broadcastGitRefresh({ phase: "error", startedAt, message })
+        throw err
       }
 
-      repos.push({
-        name: entry.name,
-        displayName,
-        path: repoDir,
-        originUrl,
-        branch,
-        commit,
-        commitMessage,
-        commitDate,
-        isDirty: dirty,
-        skills,
-      })
-    }
+      // Phase 2 — re-read commit/dirty state and rediscover skills, so the list
+      // reflects whatever the pulls just moved.
+      broadcastGitRefresh({ phase: "scanning", startedAt })
+      const repos = await listGitRepoSummaries()
 
-    repos.sort((a, b) => a.displayName.localeCompare(b.displayName))
-    return repos
-  })
+      const synced = Object.keys(sync).length
+      broadcastGitRefresh({ phase: "done", index: synced, total: synced, startedAt })
+
+      // Timing + failures go to the log, not the UI: the status bar already
+      // shows the outcome, but a repo that failed needs its git message kept.
+      for (const [name, r] of Object.entries(sync)) {
+        if (r.status === "error") {
+          console.warn(`[git-sources] ${name} pull failed: ${r.error}`)
+        }
+      }
+      console.log(
+        `[git-sources] refresh: ${synced} repos in ${Date.now() - startedAt}ms`,
+        JSON.stringify(
+          Object.fromEntries(Object.entries(sync).map(([k, v]) => [k, v.status])),
+        ),
+      )
+
+      return { repos, sync }
+    },
+  )
 
   ipcMain.handle(
     "git-sources:pull",
@@ -2892,24 +2998,6 @@ Add your skill instructions here.
         return { status: "error", error: `Repository not found: ${repoName}` }
       }
       return syncGitRepo(repoDir)
-    },
-  )
-
-  ipcMain.handle(
-    "git-sources:pull-all",
-    async (): Promise<Record<string, GitRepoSyncResult>> => {
-      if (!(await dirExists(STORE_REPOS_DIR))) return {}
-      const entries = await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true })
-      const results: Record<string, GitRepoSyncResult> = {}
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-        const repoDir = path.join(STORE_REPOS_DIR, entry.name)
-        const gitDir = path.join(repoDir, ".git")
-        if (await dirExists(gitDir)) {
-          results[entry.name] = await syncGitRepo(repoDir)
-        }
-      }
-      return results
     },
   )
 

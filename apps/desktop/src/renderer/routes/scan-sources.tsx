@@ -1,6 +1,123 @@
 import { t } from "../lib/i18n"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { electronAPI } from "../lib/electron-api"
+
+/**
+ * What a finished refresh actually did, including the delta against what the
+ * renderer was already showing. Without the delta a refresh that changed
+ * nothing is indistinguishable from one that failed.
+ */
+interface RefreshSummary {
+  repoCount: number
+  skillCount: number
+  durationMs: number
+  updated: number
+  upToDate: number
+  skipped: number
+  failed: number
+  /** Repos that actually moved to a new commit, for naming in the status line. */
+  updatedRepos: string[]
+  /** Git's own message per failed repo, as `repo: message`. */
+  errors: string[]
+  addedRepos: number
+  addedSkills: number
+  removedSkills: number
+}
+
+/** Renders a duration as the user reads it: `0.4s`, `2.1s`, `1m 05s`. */
+function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  const mins = Math.floor(ms / 60_000)
+  return `${mins}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, "0")}s`
+}
+
+/**
+ * The settled state of a refresh. Leads with the delta, because "what changed"
+ * is the question the user clicked Refresh to answer; the counts are the
+ * fallback when nothing changed.
+ */
+function RefreshStatusBar({ summary }: { summary: RefreshSummary }) {
+  const { updated, upToDate, skipped, failed } = summary
+  const parts = [
+    { label: t("Updated"), value: updated, className: "text-emerald-400" },
+    { label: t("Up to date"), value: upToDate, className: "text-muted" },
+    { label: t("Skipped"), value: skipped, className: "text-amber-400" },
+    {
+      label: t("Failed"),
+      value: failed,
+      className: "text-red-400",
+      // Show why it failed inline; git's message is often the only actionable part.
+      title: summary.errors.length > 0 ? summary.errors.join(" · ") : undefined,
+    },
+  ]
+
+  // Singular and plural need separate keys: the dictionary is keyed by literal
+// source strings, so "2 repo" would otherwise be what the user reads.
+const deltas: string[] = []
+  if (summary.addedRepos > 0) {
+    deltas.push(
+      (summary.addedRepos === 1 ? t("+{n} repo") : t("+{n} repos")).replace(
+        "{n}",
+        String(summary.addedRepos),
+      ),
+    )
+  }
+  if (summary.addedSkills > 0) {
+    deltas.push(
+      (summary.addedSkills === 1 ? t("+{n} skill") : t("+{n} skills")).replace(
+        "{n}",
+        String(summary.addedSkills),
+      ),
+    )
+  }
+  if (summary.removedSkills > 0) {
+    deltas.push(
+      (summary.removedSkills === 1 ? t("−{n} skill") : t("−{n} skills")).replace(
+        "{n}",
+        String(summary.removedSkills),
+      ),
+    )
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px]">
+      <span className="flex items-center gap-2">
+        {parts.map(
+          (part) =>
+            part.value > 0 && (
+              <span
+                key={part.label}
+                title={part.title}
+                className={`font-medium ${part.className}`}
+              >
+                {part.value} {part.label}
+              </span>
+            ),
+        )}
+        {updated === 0 && upToDate === 0 && skipped === 0 && failed === 0 && (
+          <span className="font-medium text-muted">{t("Nothing to update")}</span>
+        )}
+      </span>
+
+      {summary.updatedRepos.length > 0 && (
+        <span className="min-w-0 truncate font-mono text-[11px] text-emerald-400">
+          {summary.updatedRepos.join(", ")}
+        </span>
+      )}
+
+      {deltas.length > 0 ? (
+        <span className="font-mono text-[11px] text-emerald-400">{deltas.join("  ")}</span>
+      ) : summary.updatedRepos.length === 0 ? (
+        <span className="text-muted">{t("No new commits, no skill changes")}</span>
+      ) : null}
+
+      <span className="ml-auto font-mono text-[11px] text-muted">
+        {summary.repoCount} {t("repos")} · {summary.skillCount} {t("skills")} ·{" "}
+        {formatDuration(summary.durationMs)}
+      </span>
+    </div>
+  )
+}
 
 export function ScanSources() {
   const [activeTab, setActiveTab] = useState<"git" | "local">("git")
@@ -12,6 +129,9 @@ export function ScanSources() {
 
   // --- Git sources state ---
   const [gitRepos, setGitRepos] = useState<GitRepoSummary[]>([])
+  // Mirrors `gitRepos` for the refresh handler, which needs a click-time
+  // snapshot to diff against but must not close over render-scoped state.
+  const gitReposRef = useRef<GitRepoSummary[]>([])
   const [loadingGit, setLoadingGit] = useState(true)
   const [gitError, setGitError] = useState<string | null>(null)
   const [selectedRepoName, setSelectedRepoName] = useState<string | null>(null)
@@ -20,7 +140,10 @@ export function ScanSources() {
   const [pullResults, setPullResults] = useState<
     Record<string, { status: "updated" | "up-to-date" | "dirty" | "error"; commit?: string; error?: string }>
   >({})
-  const [pullingAll, setPullingAll] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshProgress, setRefreshProgress] = useState<GitRefreshProgress | null>(null)
+  const [refreshSummary, setRefreshSummary] = useState<RefreshSummary | null>(null)
+  const [elapsed, setElapsed] = useState(0)
   const [installingSkill, setInstallingSkill] = useState<string | null>(null)
   const [removingSkill, setRemovingSkill] = useState<string | null>(null)
   const [batchRemovingCore, setBatchRemovingCore] = useState(false)
@@ -50,6 +173,29 @@ export function ScanSources() {
     loadGitRepos()
   }, [])
 
+  // Progress events only matter while the Sources page is mounted, so subscribe
+  // here rather than keeping a listener alive for the app's lifetime.
+  useEffect(() => {
+    return electronAPI.onGitSourcesProgress((progress) => {
+      setRefreshProgress(progress)
+      if (progress.phase === "error") {
+        setRefreshing(false)
+        setRefreshSummary(null)
+        setGitError(progress.message ?? t("Refresh failed"))
+      }
+    })
+  }, [])
+
+  // A ticking elapsed timer is what makes a slow refresh legible: the progress
+  // bar alone can sit still for seconds on a large repo with no sign of life.
+  useEffect(() => {
+    if (!refreshing || !refreshProgress) return
+    const tick = () => setElapsed(Date.now() - refreshProgress.startedAt)
+    tick()
+    const id = window.setInterval(tick, 100)
+    return () => window.clearInterval(id)
+  }, [refreshing, refreshProgress])
+
   function loadLocalPaths() {
     electronAPI
       .settingsAll()
@@ -67,6 +213,7 @@ export function ScanSources() {
     try {
       const list = await electronAPI.gitSourcesList()
       setGitRepos(list)
+      gitReposRef.current = list
       setSelectedRepoName((prev) => {
         if (prev && list.some((r) => r.name === prev)) return prev
         return list[0]?.name ?? null
@@ -108,16 +255,65 @@ export function ScanSources() {
     }
   }
 
-  async function handlePullAll() {
-    setPullingAll(true)
+  /**
+   * One Refresh does the whole job: pull every repo that is not dirty, then
+   * re-read them. The result arrives with the fresh list, so there is no second
+   * request, and the per-repo pull badges are fed from the same response.
+   */
+  async function handleRefresh() {
+    if (refreshing) return
+    setRefreshing(true)
+    setGitError(null)
+    setRefreshSummary(null)
+    setRefreshProgress(null)
+    setElapsed(0)
+
+    // The snapshot the delta is measured against has to be read at click time.
+    // `gitRepos` in a closure would be stale by the time the awaits resolve.
+    const before = gitReposRef.current
+    const startedAt = Date.now()
+
     try {
-      const res = await electronAPI.gitSourcesPullAll()
-      setPullResults(res)
-      await loadGitRepos()
+      const { repos, sync } = await electronAPI.gitSourcesRefresh()
+
+      setPullResults((prev) => ({ ...prev, ...sync }))
+      setGitRepos(repos)
+      gitReposRef.current = repos
+      setSelectedRepoName((prev) => {
+        if (prev && repos.some((r) => r.name === prev)) return prev
+        return repos[0]?.name ?? null
+      })
+
+      const beforeRepoNames = new Set(before.map((r) => r.name))
+      const beforeSkills = new Set(before.flatMap((r) => r.skills.map((s) => s.name)))
+      const afterSkills = new Set(repos.flatMap((r) => r.skills.map((s) => s.name)))
+
+      const nameOf = (repoName: string) =>
+        repos.find((r) => r.name === repoName)?.displayName ?? repoName
+
+      setRefreshSummary({
+        repoCount: repos.length,
+        skillCount: afterSkills.size,
+        durationMs: Date.now() - startedAt,
+        updated: Object.values(sync).filter((r) => r.status === "updated").length,
+        upToDate: Object.values(sync).filter((r) => r.status === "up-to-date").length,
+        skipped: Object.values(sync).filter((r) => r.status === "dirty").length,
+        failed: Object.values(sync).filter((r) => r.status === "error").length,
+        updatedRepos: Object.entries(sync)
+          .filter(([, r]) => r.status === "updated")
+          .map(([repoName]) => nameOf(repoName)),
+        errors: Object.entries(sync)
+          .filter(([, r]) => r.status === "error")
+          .map(([repoName, r]) => `${nameOf(repoName)}: ${r.error ?? t("Unknown error")}`),
+        addedRepos: repos.filter((r) => !beforeRepoNames.has(r.name)).length,
+        addedSkills: [...afterSkills].filter((name) => !beforeSkills.has(name)).length,
+        removedSkills: [...beforeSkills].filter((name) => !afterSkills.has(name)).length,
+      })
     } catch (err: unknown) {
-      console.error("[git-sources] pull all failed", err)
+      setGitError(err instanceof Error ? err.message : String(err))
     } finally {
-      setPullingAll(false)
+      setRefreshing(false)
+      setRefreshProgress(null)
     }
   }
 
@@ -286,10 +482,10 @@ export function ScanSources() {
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => void loadGitRepos()}
-                  disabled={loadingGit}
+                  onClick={() => void handleRefresh()}
+                  disabled={refreshing || loadingGit}
                   className="rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground hover:bg-surface disabled:opacity-50"
-                  title="重新扫描本地仓库状态"
+                  title="拉取所有 Git 仓库的最新提交，并重新扫描本机状态"
                 >
                   <span className="inline-flex items-center gap-1.5">
                     <svg
@@ -301,37 +497,11 @@ export function ScanSources() {
                       strokeWidth="2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      className={loadingGit ? "animate-spin" : ""}
+                      className={refreshing ? "animate-spin" : ""}
                     >
                       <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
                     </svg>
-                    {t("Refresh")}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => void handlePullAll()}
-                  disabled={pullingAll || gitRepos.length === 0}
-                  className="rounded-lg border border-border bg-background px-3 py-1.5 text-[12px] font-medium text-foreground hover:bg-surface disabled:opacity-50"
-                  title="更新所有未修改的 Git 仓库"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className={pullingAll ? "animate-spin" : ""}
-                    >
-                      <path d="M12 3v12" />
-                      <path d="m8 11 4 4 4-4" />
-                      <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4" />
-                    </svg>
-                    {pullingAll ? t("Updating...") : t("Update all Git sources")}
+                    {refreshing ? t("Refreshing...") : t("Refresh")}
                   </span>
                 </button>
 
@@ -347,6 +517,50 @@ export function ScanSources() {
                 </button>
               </div>
             </div>
+
+            {/* Refresh status bar. Sits inside the toolbar so it is visible while
+                the repos list is still on screen, and persists after the refresh
+                so the outcome is readable without re-running it. */}
+            {(refreshing || refreshSummary) && (
+              <div className="mb-4 rounded-xl border border-border bg-surface px-4 py-3">
+                {refreshing && refreshProgress && (
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3 text-[12px]">
+                      <span className="truncate font-medium text-foreground">
+                        {refreshProgress.phase === "pulling"
+                          ? t("Pulling {repo} ({index}/{total})")
+                              .replace("{repo}", refreshProgress.repoName ?? "")
+                              .replace("{index}", String(refreshProgress.index ?? 0))
+                              .replace("{total}", String(refreshProgress.total ?? 0))
+                          : t("Reading local state...")}
+                      </span>
+                      <span className="shrink-0 font-mono text-[11px] text-muted">
+                        {formatDuration(elapsed)}
+                      </span>
+                    </div>
+                    <div className="h-1 w-full overflow-hidden rounded-full bg-border">
+                      <div
+                        className="h-full rounded-full bg-foreground transition-all duration-200"
+                        style={{
+                          width:
+                            refreshProgress.phase === "pulling" && refreshProgress.total
+                              ? `${Math.round(((refreshProgress.index ?? 0) / refreshProgress.total) * 100)}%`
+                              : "60%",
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {refreshing && !refreshProgress && (
+                  <p className="text-[12px] text-muted">{t("Starting refresh...")}</p>
+                )}
+
+                {!refreshing && refreshSummary && (
+                  <RefreshStatusBar summary={refreshSummary} />
+                )}
+              </div>
+            )}
 
             {/* Error Banner */}
             {gitError && (
@@ -514,6 +728,9 @@ export function ScanSources() {
                           <div className="min-w-0 flex-1">
                             {pullRes ? (
                               <span
+                                // A bare "Failed" tells the user nothing about what to
+                                // do next, so surface git's own message on hover.
+                                title={pullRes.error}
                                 className={`text-[10px] font-medium px-1.5 py-0.5 rounded truncate inline-block max-w-full ${
                                   pullRes.status === "updated"
                                     ? "bg-emerald-500/20 text-emerald-400"

@@ -130,7 +130,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gitSourcesList: () => ipcRenderer.invoke("git-sources:list"),
   gitSourcesAdd: (url: string) => ipcRenderer.invoke("git-sources:add", url),
   gitSourcesPull: (repoName: string) => ipcRenderer.invoke("git-sources:pull", repoName),
-  gitSourcesPullAll: () => ipcRenderer.invoke("git-sources:pull-all"),
+  gitSourcesRefresh: () => ipcRenderer.invoke("git-sources:refresh"),
+  onGitSourcesProgress: (callback: (progress: GitRefreshProgress) => void) =>
+    subscribe("git-sources:progress", callback),
   gitSourcesRemove: (repoName: string, action: string) =>
     ipcRenderer.invoke("git-sources:remove", repoName, action),
 
