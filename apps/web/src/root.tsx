@@ -23,16 +23,17 @@ export const links: LinksFunction = () => [
 ];
 
 export const meta: MetaFunction = () => [
-	{ title: "SkillsGate — The open marketplace for AI agent skills" },
+	{ title: "SkillsGate · Desktop app for managing AI agent skills" },
 	{
 		name: "description",
 		content:
-			"Discover, publish, and install skills that extend AI coding assistants like Claude Code, Cursor, and Windsurf. The npm for AI skills.",
+			"Free, open-source desktop app to browse, install, edit, and organize AI agent skills across Claude Code, Cursor, Codex, and 16 more tools. macOS, Windows, Linux.",
 	},
 	{ property: "og:title", content: "SkillsGate" },
 	{
 		property: "og:description",
-		content: "The open marketplace for AI agent skills",
+		content:
+			"Browse, install, and edit AI agent skills across 19 coding tools. Free and open source for macOS, Windows, and Linux.",
 	},
 	{ property: "og:url", content: "https://skillsgate.ai" },
 	{ property: "og:site_name", content: "SkillsGate" },
@@ -41,7 +42,8 @@ export const meta: MetaFunction = () => [
 	{ name: "twitter:title", content: "SkillsGate" },
 	{
 		name: "twitter:description",
-		content: "The open marketplace for AI agent skills",
+		content:
+			"Browse, install, and edit AI agent skills across 19 coding tools. Free and open source for macOS, Windows, and Linux.",
 	},
 ];
 

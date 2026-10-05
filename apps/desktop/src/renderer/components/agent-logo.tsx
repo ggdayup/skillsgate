@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react"
+import { t } from "../lib/i18n"
 import ampLogo from "../assets/agent-logos/amp.svg"
 import antigravityLogo from "../assets/agent-logos/antigravity.svg"
 import claudeLogo from "../assets/agent-logos/claude.svg"
@@ -189,25 +190,45 @@ export const AgentLogo = memo(function AgentLogo({ name, size = 16, shortCode, c
  * `+N` chip. This matters in narrow containers (e.g. the 288px Local Library
  * column): without a cap a skill installed in a dozen agents pushes the row
  * wide enough that the skill name is squeezed down to a couple of characters.
+ *
+ * `dimmed` lists agents to render at half opacity — tools the skill is installed
+ * in that the user has hidden from My Tools. They stay visible so the row is
+ * still a truthful account of where the skill lives.
  */
 export const AgentLogoRow = memo(function AgentLogoRow({
   agents,
   size = 14,
   max,
+  dimmed,
 }: {
   agents: string[]
   size?: number
   max?: number
+  dimmed?: string[]
 }) {
   const unique = useMemo(() => Array.from(new Set(agents)), [agents])
   const shown = max !== undefined && unique.length > max ? unique.slice(0, max) : unique
   const hiddenCount = unique.length - shown.length
+  const dimmedSet = useMemo(
+    () => (dimmed && dimmed.length > 0 ? new Set(dimmed) : null),
+    [dimmed],
+  )
 
   return (
     <span className="flex items-center gap-1" title={unique.join(", ")}>
-      {shown.map((agent) => (
-        <AgentLogo key={agent} name={agent} size={size} />
-      ))}
+      {shown.map((agent) =>
+        dimmedSet?.has(agent) ? (
+          <span
+            key={agent}
+            className="inline-flex opacity-50"
+            title={t("Hidden tool — enable in Settings")}
+          >
+            <AgentLogo name={agent} size={size} />
+          </span>
+        ) : (
+          <AgentLogo key={agent} name={agent} size={size} />
+        ),
+      )}
       {hiddenCount > 0 && (
         <span
           className="inline-flex items-center justify-center rounded-full border border-border bg-surface-hover font-mono text-muted flex-shrink-0 select-none"

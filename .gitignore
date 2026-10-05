@@ -73,10 +73,10 @@ apps/web/next-env.d.ts
 apps/web/*.tsbuildinfo
 
 # ==========================================
-# Packages/cli specific
+# Agent skill directories
 # ==========================================
 
-# Lock file written by skillsgate CLI
+# Legacy lock file written by the retired skillsgate CLI
 .skill-lock.json
 
 # Agent skill directories (installed by skillsgate CLI)
