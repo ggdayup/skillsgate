@@ -12,6 +12,7 @@
     "preview": "electron-vite preview",
     "i18n:check": "node scripts/i18n-drift.mjs --check",
     "test": "tsx --test 'src/main/*.test.ts'",
+    "typecheck": "tsc --noEmit",
     "package": "electron-vite build && electron-builder --config electron-builder.yml",
     "package:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac",
     "package:win": "electron-vite build && electron-builder --config electron-builder.yml --win",

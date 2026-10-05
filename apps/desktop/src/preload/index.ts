@@ -79,8 +79,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   coreStatus: () => ipcRenderer.invoke("core:status"),
   corePlan: () => ipcRenderer.invoke("core:plan"),
   coreSync: () => ipcRenderer.invoke("core:sync"),
+  corePrunePlan: () => ipcRenderer.invoke("core:prune-plan"),
+  corePruneApply: () => ipcRenderer.invoke("core:prune-apply"),
   corePromote: (skillName: string, agentName: string) =>
     ipcRenderer.invoke("core:promote", skillName, agentName),
+  coreBatchAdd: (skills: Array<{ name: string; canonicalPath: string }>) =>
+    ipcRenderer.invoke("core:batch-add", skills),
   coreRemove: (skillName: string, mode?: "detach" | "purge") =>
     ipcRenderer.invoke("core:remove", skillName, mode),
   coreBatchRemove: (skillNames: string[], mode?: "detach" | "purge") =>
@@ -129,7 +133,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Git Sources (~/.agents/.store/repos)
   gitSourcesList: () => ipcRenderer.invoke("git-sources:list"),
   gitSourcesAdd: (url: string) => ipcRenderer.invoke("git-sources:add", url),
-  gitSourcesPull: (repoName: string) => ipcRenderer.invoke("git-sources:pull", repoName),
+  gitSourcesPull: (repoName: string, strategy?: string) =>
+    ipcRenderer.invoke("git-sources:pull", repoName, strategy),
+  gitSourcesAbortConflict: (repoName: string, prePullCommit?: string) =>
+    ipcRenderer.invoke("git-sources:abort-conflict", repoName, prePullCommit),
+  gitSourcesResolveConflicts: (repoName: string) =>
+    ipcRenderer.invoke("git-sources:resolve-conflicts", repoName),
+  gitSourcesOpenFile: (repoName: string, relativePath?: string) =>
+    ipcRenderer.invoke("git-sources:open-file", repoName, relativePath),
   gitSourcesRefresh: () => ipcRenderer.invoke("git-sources:refresh"),
   onGitSourcesProgress: (callback: (progress: GitRefreshProgress) => void) =>
     subscribe("git-sources:progress", callback),

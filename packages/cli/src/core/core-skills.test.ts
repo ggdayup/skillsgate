@@ -32,6 +32,8 @@ const {
   installDirToCore,
   resolveLocalSkill,
   findDanglingCoreEntries,
+  planCorePrune,
+  applyCorePrune,
 } = await import("./core-skills.js");
 const { addPathToCore } = await import("../commands/core.js");
 const { agents } = await import("./agents.js");
@@ -531,4 +533,63 @@ describe("addPathToCore", () => {
     assert.equal(await exists(target), true);
   });
 });
+
+describe("core pruning", () => {
+  it("plans pruning for non-core symlinks and real directories while protecting whitelist", async () => {
+    // 1. Ensure core entry exists
+    await mkCoreEntry("core-alpha");
+
+    // 2. Create Claude skills dir with 1 core link, 1 non-core link, and 1 non-core real dir
+    await fs.mkdir(claudeDir, { recursive: true });
+    const coreAlphaReal = path.join(coreDir, "core-alpha");
+    await fs.symlink(path.relative(claudeDir, coreAlphaReal), path.join(claudeDir, "core-alpha"));
+
+    const externalStoreDir = path.join(home, ".agents", ".store", "extra-symlink");
+    await fs.mkdir(externalStoreDir, { recursive: true });
+    await fs.symlink(path.relative(claudeDir, externalStoreDir), path.join(claudeDir, "extra-symlink"));
+
+    const realDir = path.join(claudeDir, "custom-real-skill");
+    await fs.mkdir(realDir, { recursive: true });
+    await fs.writeFile(path.join(realDir, "SKILL.md"), "# Custom\n");
+
+    // 3. Plan pruning for claude-code
+    const plan = await planCorePrune({
+      agents: [agents["claude-code"]],
+      protectedSkills: { "claude-code": ["protected-skill"] },
+    });
+
+    const unlinkItem = plan.items.find((i) => i.skill === "extra-symlink");
+    assert.ok(unlinkItem);
+    assert.equal(unlinkItem.action, "unlink");
+
+    const backupItem = plan.items.find((i) => i.skill === "custom-real-skill");
+    assert.ok(backupItem);
+    assert.equal(backupItem.action, "backup-and-remove");
+
+    // Core item should NOT be in plan
+    const coreItem = plan.items.find((i) => i.skill === "core-alpha");
+    assert.equal(coreItem, undefined);
+  });
+
+  it("applies prune by unlinking symlinks and moving real directories to backup", async () => {
+    const plan = await planCorePrune({
+      agents: [agents["claude-code"]],
+    });
+
+    const res = await applyCorePrune(plan);
+    assert.equal(res.unlinked >= 1, true);
+    assert.equal(res.backedUp >= 1, true);
+    assert.ok(res.backupDir);
+
+    // Verify extra-symlink is unlinked
+    assert.equal(await exists(path.join(claudeDir, "extra-symlink")), false);
+    // Verify custom-real-skill was moved
+    assert.equal(await exists(path.join(claudeDir, "custom-real-skill")), false);
+    // Verify backup exists
+    assert.equal(await exists(path.join(res.backupDir!, "claude-code", "custom-real-skill")), true);
+    // Verify core skill is still present
+    assert.equal(await exists(path.join(claudeDir, "core-alpha")), true);
+  });
+});
+
 

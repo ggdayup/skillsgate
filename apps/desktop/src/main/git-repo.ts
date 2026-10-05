@@ -24,10 +24,16 @@ export interface GitExecResult {
   error?: string
 }
 
+export type GitSyncStrategy = "ff-only" | "stash-merge" | "discard-reset"
+
 export interface RepoSyncResult {
-  status: "updated" | "up-to-date" | "dirty" | "error"
+  status: "updated" | "up-to-date" | "dirty" | "conflict" | "error"
   commit?: string
   error?: string
+  mergedLocalChanges?: boolean
+  conflictedFiles?: string[]
+  backupPath?: string
+  prePullCommit?: string
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -303,27 +309,324 @@ export async function takeoverStaticStoreSkill(skillName: string, repoSkillDir: 
   }
 }
 
-export async function syncGitRepo(repoDir: string): Promise<RepoSyncResult> {
+export async function gitStashPush(
+  repoDir: string,
+  message?: string,
+): Promise<{ success: boolean; stashed: boolean; error?: string }> {
+  const args = ["stash", "push", "-u"]
+  if (message) {
+    args.push("-m", message)
+  }
+  const res = await gitExec(args, repoDir)
+  if (!res.success) {
+    if (
+      res.stdout.includes("No local changes to save") ||
+      res.stderr.includes("No local changes to save")
+    ) {
+      return { success: true, stashed: false }
+    }
+    return { success: false, stashed: false, error: res.error }
+  }
+  const stashed = !res.stdout.includes("No local changes to save")
+  return { success: true, stashed }
+}
+
+export async function getGitConflicts(repoDir: string): Promise<string[]> {
+  const conflicted = new Set<string>()
+  const diffRes = await gitExec(["diff", "--name-only", "--diff-filter=U"], repoDir)
+  if (diffRes.success && diffRes.stdout.trim()) {
+    for (const rawLine of diffRes.stdout.trim().split("\n")) {
+      const line = rawLine.trim().replace(/^"|"$/g, "")
+      if (line) conflicted.add(line)
+    }
+  }
+  const statusRes = await gitExec(["status", "--porcelain"], repoDir)
+  if (statusRes.success && statusRes.stdout.trim()) {
+    for (const rawLine of statusRes.stdout.trim().split("\n")) {
+      const line = rawLine.trim()
+      const match = line.match(/^(?:DD|AU|UD|UA|DU|AA|UU)\s+(.+)$/)
+      if (match && match[1]) {
+        conflicted.add(match[1].trim().replace(/^"|"$/g, ""))
+      }
+    }
+  }
+  return [...conflicted].sort()
+}
+
+export async function gitStashPop(
+  repoDir: string,
+): Promise<{ success: boolean; conflict: boolean; conflictedFiles?: string[]; error?: string }> {
+  const res = await gitExec(["stash", "pop"], repoDir)
+  if (res.success) {
+    return { success: true, conflict: false }
+  }
+  const conflicts = await getGitConflicts(repoDir)
+  const isConflict =
+    conflicts.length > 0 ||
+    res.stdout.includes("CONFLICT") ||
+    res.stderr.includes("CONFLICT") ||
+    res.stdout.includes("Unmerged paths")
+  if (isConflict) {
+    return {
+      success: false,
+      conflict: true,
+      conflictedFiles: conflicts,
+      error: "代码合入发生冲突",
+    }
+  }
+  return { success: false, conflict: false, error: res.error }
+}
+
+export async function gitStashDrop(
+  repoDir: string,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await gitExec(["stash", "drop"], repoDir)
+  return { success: res.success, error: res.error }
+}
+
+export async function getStashBaseCommit(repoDir: string): Promise<string | null> {
+  const res = await gitExec(["rev-parse", "--verify", "stash@{0}^1"], repoDir)
+  return res.success && res.stdout.trim() ? res.stdout.trim() : null
+}
+
+export async function gitResetHard(
+  repoDir: string,
+): Promise<{ success: boolean; error?: string }> {
+  const resetRes = await gitExec(["reset", "--hard", "HEAD"], repoDir)
+  if (!resetRes.success) {
+    return { success: false, error: resetRes.error }
+  }
+  const cleanRes = await gitExec(["clean", "-fd"], repoDir)
+  if (!cleanRes.success) {
+    return { success: false, error: cleanRes.error }
+  }
+  return { success: true }
+}
+
+export async function gitAbortStashMerge(
+  repoDir: string,
+  prePullCommit?: string,
+): Promise<{ success: boolean; restoredLocalState: boolean; error?: string }> {
+  const targetCommit = prePullCommit || (await getStashBaseCommit(repoDir))
+
+  const resetRes = await gitResetHard(repoDir)
+  if (!resetRes.success) {
+    return { success: false, restoredLocalState: false, error: resetRes.error }
+  }
+
+  if (targetCommit) {
+    const revertRes = await gitExec(["reset", "--hard", targetCommit], repoDir)
+    if (revertRes.success) {
+      const popRes = await gitStashPop(repoDir)
+      if (popRes.success) {
+        return { success: true, restoredLocalState: true }
+      }
+      return {
+        success: true,
+        restoredLocalState: false,
+        error: "回滚已完成，但恢复本地暂存修改失败: " + popRes.error,
+      }
+    }
+    return {
+      success: false,
+      restoredLocalState: false,
+      error: "重置到合并前版本失败: " + revertRes.error,
+    }
+  }
+  return { success: true, restoredLocalState: false }
+}
+
+export async function gitResolveConflicts(
+  repoDir: string,
+): Promise<{ ok: boolean; remainingConflicts?: string[]; error?: string }> {
+  const conflictedFiles = await getGitConflicts(repoDir)
+  if (conflictedFiles.length === 0) {
+    const stashMsgRes = await gitExec(["log", "-1", "--format=%s", "refs/stash"], repoDir)
+    if (stashMsgRes.success && stashMsgRes.stdout.includes("skillsgate-stash-merge-")) {
+      await gitStashDrop(repoDir).catch(() => {})
+    }
+    return { ok: true }
+  }
+
+  const unhandled: string[] = []
+  for (const relPath of conflictedFiles) {
+    const cleanRel = relPath.replace(/^"|"$/g, "").trim()
+    const fullPath = path.join(repoDir, cleanRel)
+    try {
+      const content = await fs.readFile(fullPath, "utf-8")
+      if (
+        /^<{7}\s+/m.test(content) ||
+        /^={7}\s*$/m.test(content) ||
+        /^>{7}\s+/m.test(content)
+      ) {
+        unhandled.push(cleanRel)
+      }
+    } catch (err: unknown) {
+      const isNotFound =
+        (err as { code?: string })?.code === "ENOENT" ||
+        !(await pathExists(fullPath))
+      if (!isNotFound) {
+        unhandled.push(cleanRel)
+      }
+    }
+  }
+
+  if (unhandled.length > 0) {
+    return {
+      ok: false,
+      remainingConflicts: unhandled,
+      error: `仍有 ${unhandled.length} 个文件存在冲突标记未解决`,
+    }
+  }
+
+  const addRes = await gitExec(["add", "-A"], repoDir)
+  if (!addRes.success) {
+    return { ok: false, error: addRes.error }
+  }
+
+  const remainingGitConflicts = await getGitConflicts(repoDir)
+  if (remainingGitConflicts.length > 0) {
+    return {
+      ok: false,
+      remainingConflicts: remainingGitConflicts,
+      error: `Git 仍检测到 ${remainingGitConflicts.length} 个未解决冲突`,
+    }
+  }
+
+  await gitExec(["reset"], repoDir).catch(() => {})
+
+  const stashMsgRes = await gitExec(["log", "-1", "--format=%s", "refs/stash"], repoDir)
+  if (stashMsgRes.success && stashMsgRes.stdout.includes("skillsgate-stash-merge-")) {
+    await gitStashDrop(repoDir).catch(() => {})
+  }
+
+  return { ok: true }
+}
+
+export async function syncGitRepo(
+  repoDir: string,
+  strategy: GitSyncStrategy = "ff-only",
+): Promise<RepoSyncResult> {
+  const existingConflicts = await getGitConflicts(repoDir)
+  if (existingConflicts.length > 0 && strategy !== "discard-reset") {
+    return {
+      status: "conflict",
+      conflictedFiles: existingConflicts,
+      error: "本地仓库存在未解决冲突，请先解决或放弃回滚后再执行更新",
+    }
+  }
+
   const dirty = await isGitDirty(repoDir)
-  if (dirty) {
+
+  if (strategy === "discard-reset") {
+    let backupPath: string | undefined
+    if (dirty || existingConflicts.length > 0) {
+      const repoName = path.basename(repoDir)
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+      backupPath = path.join(BACKUP_DIR, `discard--${repoName}--${stamp}`)
+      await fs.mkdir(BACKUP_DIR, { recursive: true })
+      await fs.cp(repoDir, backupPath, {
+        recursive: true,
+        filter: (src) => path.basename(src) !== ".git",
+      })
+    }
+
+    const resetRes = await gitResetHard(repoDir)
+    if (!resetRes.success) {
+      return { status: "error", error: "重置本地修改失败: " + resetRes.error, backupPath }
+    }
+
+    const stashMsgRes = await gitExec(["log", "-1", "--format=%s", "refs/stash"], repoDir)
+    if (stashMsgRes.success && stashMsgRes.stdout.includes("skillsgate-stash-merge-")) {
+      await gitStashDrop(repoDir).catch(() => {})
+    }
+
+    const pullRes = await gitPull(repoDir)
+    if (!pullRes.success) {
+      return { status: "error", error: pullRes.error, backupPath }
+    }
+
+    const commit = await getGitCommit(repoDir)
+    return {
+      status: pullRes.alreadyUpToDate ? "up-to-date" : "updated",
+      commit,
+      backupPath,
+    }
+  }
+
+  if (!dirty) {
+    const pullRes = await gitPull(repoDir)
+    if (!pullRes.success) {
+      return {
+        status: "error",
+        error: pullRes.error,
+      }
+    }
+    const commit = await getGitCommit(repoDir)
+    return {
+      status: pullRes.alreadyUpToDate ? "up-to-date" : "updated",
+      commit,
+    }
+  }
+
+  if (strategy === "ff-only") {
     return {
       status: "dirty",
       error: "本地仓库存在未提交修改（Dirty），已跳过更新以防止覆盖本地改动",
     }
   }
 
-  const pullRes = await gitPull(repoDir)
-  if (!pullRes.success) {
+  if (strategy === "stash-merge") {
+    const prePullCommit = await getGitCommit(repoDir)
+    const stamp = Date.now()
+    const stashRes = await gitStashPush(repoDir, `skillsgate-stash-merge-${stamp}`)
+    if (!stashRes.success) {
+      return { status: "error", error: "保存本地修改（stash）失败: " + stashRes.error }
+    }
+
+    const pullRes = await gitPull(repoDir)
+    if (!pullRes.success) {
+      const popRestore = await gitStashPop(repoDir)
+      const note = popRestore.success ? "（已自动恢复本地修改）" : "（本地修改仍暂存在 Git stash 中）"
+      return { status: "error", error: `拉取远端更新失败: ${pullRes.error}${note}` }
+    }
+
+    const popRes = await gitStashPop(repoDir)
+    const commit = await getGitCommit(repoDir)
+
+    if (popRes.conflict) {
+      const conflicts = popRes.conflictedFiles?.length
+        ? popRes.conflictedFiles
+        : await getGitConflicts(repoDir)
+      return {
+        status: "conflict",
+        commit,
+        prePullCommit,
+        conflictedFiles: conflicts,
+        error: `更新已拉取，但与本地修改发生冲突（共 ${conflicts.length} 个文件），暂存已保留在 Git stash 中`,
+      }
+    }
+
+    if (!popRes.success) {
+      return {
+        status: "error",
+        commit,
+        prePullCommit,
+        error: "恢复本地修改失败: " + popRes.error,
+      }
+    }
+
     return {
-      status: "error",
-      error: pullRes.error,
+      status: pullRes.alreadyUpToDate ? "up-to-date" : "updated",
+      commit,
+      prePullCommit,
+      mergedLocalChanges: true,
     }
   }
 
-  const commit = await getGitCommit(repoDir)
   return {
-    status: pullRes.alreadyUpToDate ? "up-to-date" : "updated",
-    commit,
+    status: "error",
+    error: `未知的同步策略: ${strategy as string}`,
   }
 }
 

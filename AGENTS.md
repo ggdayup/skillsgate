@@ -132,6 +132,11 @@ Many agents (such as Antigravity, CodeBuddy CN, Pi and WorkBuddy AI) link their 
 - **Behavior**: When real paths match, the installer writes once to the canonical directory and skips creating self-referential symlinks, preventing filesystem recursion or `EEXIST` failures.
 - ⚠️ **`CANONICAL_SKILLS_DIR()` is `~/.agents/.store`, not `~/.agents/skills`.** The latter is the core set (below). Conflating the two is what made every core entry look like a same-name conflict.
 
+### Physical Directory Aliasing Deduplication
+Multiple installed agents can point their `globalSkillsDir` to the exact same physical folder on disk. For example, Antigravity and Antigravity CLI can both resolve to the same underlying directory through symlinks.
+- **Invariant**: Any iteration across installed agents that modifies or scans agent skill directories must deduplicate target directories by their canonical path using `realpathOrResolve()`.
+- **Rationale**: Without canonical path deduplication, concurrent or sequential file operations visit the same physical folder multiple times. This causes duplicate writes, race conditions, and unexpected ENOENT collisions when an earlier iteration moves or removes a file.
+
 ### Core Skill Set (`~/.agents/skills`)
 A central, git-tracked directory whose contents are symlinked into **every** detected tool. A tool may still own non-core skills on top.
 

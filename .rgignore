@@ -1,0 +1,39 @@
+# Build and release artifacts
+release/
+**/release/**
+dist/
+**/dist/**
+out/
+**/out/**
+build/
+**/build/**
+
+# Packaging and unpack directories
+*-unpacked/
+**/*-unpacked/**
+mac-arm64/
+**/mac-arm64/**
+mac-x64/
+**/mac-x64/**
+win-unpacked/
+**/win-unpacked/**
+linux-unpacked/
+**/linux-unpacked/**
+
+# Large binaries, packages, and archives
+*.dmg
+*.zip
+*.blockmap
+*.asar
+*.exe
+*.app/
+**/*.app/**
+
+# Dependencies and caches
+node_modules/
+**/node_modules/**
+.next/
+**/.next/**
+.turbo/
+**/.turbo/**
+*.tsbuildinfo

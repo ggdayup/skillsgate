@@ -30,6 +30,7 @@ const {
   removeCoreSkill,
   installDirToCore,
   findDanglingCoreEntries,
+  batchAddToCore,
 } = require("./core-skills") as typeof import("./core-skills");
 
 import type { CoreAgent } from "./core-skills";
@@ -332,6 +333,71 @@ describe("findDanglingCoreEntries", () => {
     const dangling = await findDanglingCoreEntries();
     const match = dangling.find((d) => d.name === "dangling-candidate");
     assert.ok(match);
+  });
+});
+
+describe("batchAddToCore", () => {
+  it("batch adds external skills and agent skills to core with fan-out", async () => {
+    const testClaudeDir = path.join(home, ".test-claude", "skills");
+    const testCursorDir = path.join(home, ".test-cursor", "skills");
+    await fs.mkdir(testClaudeDir, { recursive: true });
+    await fs.mkdir(testCursorDir, { recursive: true });
+
+    const testClaudeAgent: CoreAgent = {
+      name: "claude-code",
+      displayName: "Claude Code",
+      globalSkillsDir: testClaudeDir,
+    };
+    const testCursorAgent: CoreAgent = {
+      name: "cursor",
+      displayName: "Cursor",
+      globalSkillsDir: testCursorDir,
+    };
+
+    // Skill 1: An external store skill
+    const storeDir = path.join(home, ".store", "ext-skill");
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(path.join(storeDir, "SKILL.md"), "# Ext Skill\n");
+
+    // Skill 2: An agent private skill
+    const agentSkillDir = path.join(testClaudeDir, "agent-priv-skill");
+    await fs.mkdir(agentSkillDir, { recursive: true });
+    await fs.writeFile(path.join(agentSkillDir, "SKILL.md"), "# Agent Priv Skill\n");
+
+    const result = await batchAddToCore(
+      [
+        { name: "ext-skill", canonicalPath: storeDir },
+        { name: "agent-priv-skill", canonicalPath: agentSkillDir },
+      ],
+      [testClaudeAgent, testCursorAgent],
+    );
+
+    assert.equal(result.added, 2);
+    assert.equal(result.already, 0);
+    assert.equal(result.failed.length, 0);
+
+    // Verify core entries exist
+    const extCore = path.join(coreDir, "ext-skill");
+    const privCore = path.join(coreDir, "agent-priv-skill");
+    assert.equal((await fs.lstat(extCore)).isSymbolicLink(), true);
+    assert.equal((await fs.lstat(privCore)).isDirectory(), true);
+
+    // Verify fan-out happened to cursor and claude
+    assert.equal((await fs.lstat(path.join(testCursorDir, "ext-skill"))).isSymbolicLink(), true);
+    assert.equal((await fs.lstat(path.join(testCursorDir, "agent-priv-skill"))).isSymbolicLink(), true);
+    assert.equal((await fs.lstat(path.join(testClaudeDir, "agent-priv-skill"))).isSymbolicLink(), true);
+
+    // Second call should report already present
+    const second = await batchAddToCore(
+      [
+        { name: "ext-skill", canonicalPath: storeDir },
+        { name: "agent-priv-skill", canonicalPath: privCore },
+      ],
+      [testClaudeAgent, testCursorAgent],
+    );
+    assert.equal(second.added, 0);
+    assert.equal(second.already, 2);
+    assert.equal(second.failed.length, 0);
   });
 });
 

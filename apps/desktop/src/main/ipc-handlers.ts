@@ -43,6 +43,7 @@ import {
 } from "./skill-paths"
 import {
   applyCoreSync,
+  applyCorePrune,
   findDanglingCoreEntries,
   getCoreStatus,
   getCoreSummary,
@@ -50,7 +51,11 @@ import {
   listCoreEntries,
   movePath,
   planCoreSync,
+  planCorePrune,
   promoteToCore,
+  batchAddToCore,
+  type CoreBatchAddSkillInput,
+  type CoreBatchAddResult,
   readCoreConfig,
   removeCoreSkill,
   removeCoreSkills,
@@ -68,6 +73,9 @@ import {
   createStoreSymlink,
   getGitCommit,
   isGitDirty,
+  getGitConflicts,
+  gitAbortStashMerge,
+  gitResolveConflicts,
   gitPull,
   realpathOrResolve,
   getGitOriginUrl,
@@ -77,6 +85,7 @@ import {
   checkRemoteUpdate,
   shouldRunScheduledCheck,
   type GitUpdateCheck,
+  type GitSyncStrategy,
 } from "./git-repo"
 
 // ---------------------------------------------------------------------------
@@ -1734,6 +1743,8 @@ async function listGitRepoSummaries(): Promise<GitRepoSummary[]> {
     const commitMessage = commitLog?.message || ""
     const commitDate = commitLog?.date || ""
     const dirty = await isGitDirty(repoDir)
+    const conflicts = await getGitConflicts(repoDir)
+    const hasConflict = conflicts.length > 0
     const displayName = getRepoDisplayName(originUrl, entry.name)
 
     // Discover skills inside this repo
@@ -1794,6 +1805,8 @@ async function listGitRepoSummaries(): Promise<GitRepoSummary[]> {
       commitMessage,
       commitDate,
       isDirty: dirty,
+      hasConflict,
+      conflictedFiles: conflicts,
       skills,
     })
   }
@@ -2456,6 +2469,9 @@ Add your skill instructions here.
       if (syncRes.status === "dirty") {
         throw new Error(syncRes.error || "本地仓库存在未提交修改（Dirty），已跳过更新以防止覆盖。")
       }
+      if (syncRes.status === "conflict") {
+        throw new Error(syncRes.error || "本地仓库存在未解决的代码冲突，请先在源管理中解决冲突。")
+      }
       if (syncRes.status === "error") {
         throw new Error(`Git pull 失败: ${syncRes.error}`)
       }
@@ -2547,7 +2563,7 @@ Add your skill instructions here.
     const results: Array<{
       repo: string
       name: string
-      status: "updated" | "up-to-date" | "dirty" | "error"
+      status: "updated" | "up-to-date" | "dirty" | "conflict" | "error"
       commit?: string
       error?: string
     }> = []
@@ -2575,11 +2591,11 @@ Add your skill instructions here.
       }
 
       const syncRes = await syncGitRepo(repoDir)
-      if (syncRes.status === "dirty") {
+      if (syncRes.status === "dirty" || syncRes.status === "conflict") {
         results.push({
           repo: repoDir,
           name: repoDisplayName,
-          status: "dirty",
+          status: syncRes.status,
           error: syncRes.error,
         })
         continue
@@ -2981,6 +2997,20 @@ Add your skill instructions here.
     return { plan, result }
   })
 
+  ipcMain.handle("core:prune-plan", async () => {
+    return planCorePrune(await getCoreAgents())
+  })
+
+  ipcMain.handle("core:prune-apply", async () => {
+    const agents = await getCoreAgents()
+    const prunePlan = await planCorePrune(agents)
+    const pruneResult = await applyCorePrune(prunePlan)
+    const syncPlan = await planCoreSync(agents)
+    const syncResult = await applyCoreSync(syncPlan)
+    await rescanAndCache().catch(() => undefined)
+    return { prunePlan, pruneResult, syncResult }
+  })
+
   ipcMain.handle("core:promote", async (_e, skillName: string, agentName: string) => {
     const agent = agentRegistry[agentName]
     if (!agent) throw new Error(`Unknown agent: ${agentName}`)
@@ -2990,6 +3020,16 @@ Add your skill instructions here.
     await rescanAndCache().catch(() => undefined)
     return res
   })
+
+  ipcMain.handle(
+    "core:batch-add",
+    async (_e, skills: CoreBatchAddSkillInput[]): Promise<CoreBatchAddResult> => {
+      const agents = await getCoreAgents()
+      const res = await batchAddToCore(skills, agents)
+      await rescanAndCache().catch(() => undefined)
+      return res
+    },
+  )
 
   ipcMain.handle(
     "core:remove",
@@ -3126,13 +3166,63 @@ Add your skill instructions here.
 
   ipcMain.handle(
     "git-sources:pull",
-    async (_e, repoName: string): Promise<GitRepoSyncResult> => {
+    async (_e, repoName: string, strategy: GitSyncStrategy = "ff-only"): Promise<GitRepoSyncResult> => {
       const safeName = path.basename(repoName)
       const repoDir = path.join(STORE_REPOS_DIR, safeName)
       if (!(await dirExists(repoDir))) {
         return { status: "error", error: `Repository not found: ${repoName}` }
       }
-      return syncGitRepo(repoDir)
+      return syncGitRepo(repoDir, strategy)
+    },
+  )
+
+  ipcMain.handle(
+    "git-sources:abort-conflict",
+    async (_e, repoName: string, prePullCommit?: string): Promise<{ ok: boolean; error?: string }> => {
+      const safeName = path.basename(repoName)
+      const repoDir = path.join(STORE_REPOS_DIR, safeName)
+      if (!(await dirExists(repoDir))) {
+        return { ok: false, error: `Repository not found: ${repoName}` }
+      }
+      const res = await gitAbortStashMerge(repoDir, prePullCommit)
+      return { ok: res.success, error: res.error }
+    },
+  )
+
+  ipcMain.handle(
+    "git-sources:resolve-conflicts",
+    async (_e, repoName: string): Promise<{ ok: boolean; remainingConflicts?: string[]; error?: string }> => {
+      const safeName = path.basename(repoName)
+      const repoDir = path.join(STORE_REPOS_DIR, safeName)
+      if (!(await dirExists(repoDir))) {
+        return { ok: false, error: `Repository not found: ${repoName}` }
+      }
+      return gitResolveConflicts(repoDir)
+    },
+  )
+
+  ipcMain.handle(
+    "git-sources:open-file",
+    async (_e, repoName: string, relativePath?: string): Promise<{ ok: boolean; error?: string }> => {
+      const safeName = path.basename(repoName)
+      const repoDir = path.join(STORE_REPOS_DIR, safeName)
+      if (!(await dirExists(repoDir))) {
+        return { ok: false, error: `Repository not found: ${repoName}` }
+      }
+      let target = repoDir
+      if (relativePath) {
+        const cleanRel = relativePath.replace(/^"|"$/g, "").trim()
+        target = path.resolve(repoDir, cleanRel)
+        if (!target.startsWith(repoDir)) {
+          return { ok: false, error: `Invalid relative path: ${relativePath}` }
+        }
+      }
+      if (!(await pathExists(target))) {
+        return { ok: false, error: `Target not found: ${target}` }
+      }
+      const err = await shell.openPath(target)
+      if (err) return { ok: false, error: err }
+      return { ok: true }
     },
   )
 
@@ -3222,6 +3312,8 @@ Add your skill instructions here.
           commitMessage,
           commitDate,
           isDirty: dirty,
+          hasConflict: false,
+          conflictedFiles: [],
           skills,
         },
       }

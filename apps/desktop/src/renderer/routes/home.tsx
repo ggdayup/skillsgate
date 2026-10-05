@@ -555,6 +555,8 @@ interface MiddlePanelProps {
   onBulkAddToCollection: (collectionName: string) => void
   onBulkCreateCollection: () => void
   onBulkDelete: () => void
+  onBulkAddToCore: () => void
+  addingToCore?: boolean
   listRef: React.RefObject<HTMLDivElement | null>
   onUpdateAllGit?: () => void
   updatingAllGit?: boolean
@@ -586,6 +588,8 @@ function MiddlePanel({
   onBulkAddToCollection,
   onBulkCreateCollection,
   onBulkDelete,
+  onBulkAddToCore,
+  addingToCore,
   listRef,
   onUpdateAllGit,
   updatingAllGit,
@@ -770,6 +774,19 @@ function MiddlePanel({
               {multiSelected.size} selected
             </span>
             <div className="flex-1" />
+            {/* Add to Core */}
+            <button
+              onClick={onBulkAddToCore}
+              disabled={addingToCore}
+              className="rounded-md border border-border px-2 py-1 text-[11px] text-foreground hover:bg-surface-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {addingToCore ? (
+                <RefreshIcon spinning size={11} />
+              ) : (
+                <span className="text-amber-400">★</span>
+              )}
+              <span>{t("Add to Core")}</span>
+            </button>
             {/* Add to Collection */}
             <div className="relative" ref={dropdownRef}>
               <button
@@ -1046,6 +1063,8 @@ interface RightPanelProps {
   onSkillRemoved: () => void
   onToggleCollection: (collectionName: string, skill: InstalledSkill) => void
   onCreateCollection: () => void
+  onAddToCore?: (skill: InstalledSkill) => void
+  addingToCore?: boolean
 }
 
 function RightPanel({
@@ -1059,6 +1078,8 @@ function RightPanel({
   onSkillRemoved,
   onToggleCollection,
   onCreateCollection,
+  onAddToCore,
+  addingToCore,
 }: RightPanelProps) {
   const coreEntry = skill ? coreFanout.get(coreKey(skill.name)) : undefined
   const [editMode, setEditMode] = useState(false)
@@ -1363,7 +1384,7 @@ function RightPanel({
             <div className="flex items-center gap-1.5">
               <AgentLogoRow agents={skill.agents} size={16} />
             </div>
-            {coreEntry && (
+            {coreEntry ? (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
                 <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-700">
                   ★ {t("core")} · {coreEntry.linked}/{coreEntry.total}{" "}
@@ -1380,7 +1401,22 @@ function RightPanel({
                   </span>
                 )}
               </div>
-            )}
+            ) : onAddToCore ? (
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={() => onAddToCore(skill)}
+                  disabled={addingToCore}
+                  className="rounded border border-border bg-surface hover:bg-surface-hover px-2 py-0.5 text-[11px] text-foreground transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {addingToCore ? (
+                    <RefreshIcon spinning size={11} />
+                  ) : (
+                    <span className="text-amber-400">★</span>
+                  )}
+                  <span>{t("Add to Core")}</span>
+                </button>
+              </div>
+            ) : null}
             <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted">
               <span className="rounded border border-border px-2 py-0.5">
                 scope: {skill.scope}
@@ -1697,6 +1733,7 @@ export function Home() {
   const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
   const [dragToast, setDragToast] = useState<DragToast | null>(null)
   const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set())
+  const [addingToCore, setAddingToCore] = useState(false)
   const [lastMultiSelectIndex, setLastMultiSelectIndex] = useState<number | null>(null)
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false)
   const [pendingBulkCollection, setPendingBulkCollection] = useState(false)
@@ -2321,6 +2358,94 @@ export function Home() {
     }
   }, [multiSelected, selectedAgent, selectedSkill, skills])
 
+  const handleBulkAddToCore = useCallback(async () => {
+    if (multiSelected.size === 0) return
+    const selected = skills.filter((s) => multiSelected.has(s.canonicalPath))
+    if (selected.length === 0) return
+
+    setAddingToCore(true)
+    try {
+      const payload = selected.map((s) => ({
+        name: s.name,
+        canonicalPath: s.canonicalPath,
+      }))
+      const res = await electronAPI.coreBatchAdd(payload)
+
+      if (res.added > 0) {
+        setDragToast({
+          type: "success",
+          message:
+            res.already > 0
+              ? `Added ${res.added} skill${res.added > 1 ? "s" : ""} to Core (${res.already} already in Core)`
+              : `Added ${res.added} skill${res.added > 1 ? "s" : ""} to Core`,
+        })
+      } else if (res.already > 0) {
+        setDragToast({
+          type: "success",
+          message: t("All selected skills are already in Core"),
+        })
+      } else if (res.failed.length > 0) {
+        setDragToast({
+          type: "error",
+          message: `Failed to add ${res.failed.length} skill(s) to Core: ${res.failed.map((f) => f.name).join(", ")}`,
+        })
+      }
+
+      setMultiSelected(new Set())
+      setLastMultiSelectIndex(null)
+
+      const plan = await electronAPI.corePlan()
+      setCoreFanout(buildCoreFanout(plan.items))
+      const freshSkills = await electronAPI.listInstalled()
+      setSkills(freshSkills)
+    } catch (err) {
+      console.error("Failed to add skills to core:", err)
+      setDragToast({
+        type: "error",
+        message: `Failed to add skills to Core: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    } finally {
+      setAddingToCore(false)
+    }
+  }, [multiSelected, skills])
+
+  const handleSingleAddToCore = useCallback(async (skill: InstalledSkill) => {
+    setAddingToCore(true)
+    try {
+      const res = await electronAPI.coreBatchAdd([
+        { name: skill.name, canonicalPath: skill.canonicalPath },
+      ])
+      if (res.added > 0) {
+        setDragToast({
+          type: "success",
+          message: `Added "${skill.name}" to Core`,
+        })
+      } else if (res.already > 0) {
+        setDragToast({
+          type: "success",
+          message: `"${skill.name}" is already in Core`,
+        })
+      } else if (res.failed.length > 0) {
+        setDragToast({
+          type: "error",
+          message: res.failed[0]?.error || `Failed to add "${skill.name}" to Core`,
+        })
+      }
+      const plan = await electronAPI.corePlan()
+      setCoreFanout(buildCoreFanout(plan.items))
+      const freshSkills = await electronAPI.listInstalled()
+      setSkills(freshSkills)
+    } catch (err) {
+      console.error("Failed to add skill to core:", err)
+      setDragToast({
+        type: "error",
+        message: `Failed to add "${skill.name}" to Core: ${err instanceof Error ? err.message : String(err)}`,
+      })
+    } finally {
+      setAddingToCore(false)
+    }
+  }, [])
+
   // Keyboard shortcuts: Escape to clear selection, Cmd/Ctrl+A to select all
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2416,6 +2541,8 @@ export function Home() {
         onBulkAddToCollection={handleBulkAddToCollection}
         onBulkCreateCollection={handleBulkCreateCollection}
         onBulkDelete={handleBulkDelete}
+        onBulkAddToCore={handleBulkAddToCore}
+        addingToCore={addingToCore}
         listRef={skillListRef}
         onUpdateAllGit={handleUpdateAllGit}
         updatingAllGit={updatingAllGit}
@@ -2433,6 +2560,8 @@ export function Home() {
         onSkillRemoved={handleSkillRemoved}
         onToggleCollection={handleToggleCollection}
         onCreateCollection={handleCreateCollection}
+        onAddToCore={handleSingleAddToCore}
+        addingToCore={addingToCore}
       />
 
       <CreateSkillDialog

@@ -155,9 +155,11 @@ export function ScanSources() {
   const [selectedRepoName, setSelectedRepoName] = useState<string | null>(null)
   const [skillSearch, setSkillSearch] = useState("")
   const [pullingRepo, setPullingRepo] = useState<Record<string, boolean>>({})
-  const [pullResults, setPullResults] = useState<
-    Record<string, { status: "updated" | "up-to-date" | "dirty" | "error"; commit?: string; error?: string }>
-  >({})
+  const [pullResults, setPullResults] = useState<Record<string, GitRepoSyncResult>>({})
+  const [dirtySyncModalRepo, setDirtySyncModalRepo] = useState<GitRepoSummary | null>(null)
+  const [dirtySyncing, setDirtySyncing] = useState(false)
+  const [conflictResolving, setConflictResolving] = useState<Record<string, boolean>>({})
+  const [conflictAbortLoading, setConflictAbortLoading] = useState<Record<string, boolean>>({})
   const [refreshing, setRefreshing] = useState(false)
   const [refreshProgress, setRefreshProgress] = useState<GitRefreshProgress | null>(null)
   const [refreshSummary, setRefreshSummary] = useState<RefreshSummary | null>(null)
@@ -296,26 +298,108 @@ export function ScanSources() {
     }
   }
 
-  async function handlePullSingle(repo: GitRepoSummary) {
-    if (repo.isDirty) return
+  async function handlePullSingle(repo: GitRepoSummary, strategy: GitSyncStrategy = "ff-only") {
+    setSelectedRepoName(repo.name)
     setPullingRepo((prev) => ({ ...prev, [repo.name]: true }))
     try {
-      const res = await electronAPI.gitSourcesPull(repo.name)
+      const res = await electronAPI.gitSourcesPull(repo.name, strategy)
       setPullResults((prev) => ({ ...prev, [repo.name]: res }))
       await loadGitRepos()
-      // A pull moves local HEAD, so any update-available marker for this repo
-      // is stale. Re-check rather than guessing the new state.
       void runUpdateCheck()
+      return res
     } catch (err: unknown) {
+      const errorResult: GitRepoSyncResult = {
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      }
       setPullResults((prev) => ({
         ...prev,
-        [repo.name]: {
-          status: "error",
-          error: err instanceof Error ? err.message : String(err),
-        },
+        [repo.name]: errorResult,
       }))
+      return errorResult
     } finally {
       setPullingRepo((prev) => ({ ...prev, [repo.name]: false }))
+    }
+  }
+
+  function handleInitiatePull(repo: GitRepoSummary) {
+    setSelectedRepoName(repo.name)
+    if (repo.hasConflict || pullResults[repo.name]?.status === "conflict") {
+      setDirtySyncModalRepo(repo)
+      return
+    }
+    if (repo.isDirty) {
+      setDirtySyncModalRepo(repo)
+      return
+    }
+    void handlePullSingle(repo, "ff-only")
+  }
+
+  async function handleDirtySyncMerge(repo: GitRepoSummary) {
+    setDirtySyncing(true)
+    try {
+      const res = await handlePullSingle(repo, "stash-merge")
+      if (res && res.status !== "error") {
+        setDirtySyncModalRepo(null)
+      }
+    } finally {
+      setDirtySyncing(false)
+    }
+  }
+
+  async function handleDirtySyncDiscard(repo: GitRepoSummary) {
+    setDirtySyncing(true)
+    try {
+      const res = await handlePullSingle(repo, "discard-reset")
+      if (res && res.status !== "error") {
+        setDirtySyncModalRepo(null)
+      }
+    } finally {
+      setDirtySyncing(false)
+    }
+  }
+
+  async function handleAbortConflict(repo: GitRepoSummary) {
+    setConflictAbortLoading((prev) => ({ ...prev, [repo.name]: true }))
+    try {
+      const prePullCommit = pullResults[repo.name]?.prePullCommit
+      const res = await electronAPI.gitSourcesAbortConflict(repo.name, prePullCommit)
+      if (res.ok) {
+        setPullResults((prev) => {
+          const next = { ...prev }
+          delete next[repo.name]
+          return next
+        })
+        await loadGitRepos()
+        void runUpdateCheck()
+      } else {
+        alert(res.error || t("Failed to abort conflict"))
+      }
+    } finally {
+      setConflictAbortLoading((prev) => ({ ...prev, [repo.name]: false }))
+    }
+  }
+
+  async function handleCheckResolveConflicts(repo: GitRepoSummary) {
+    setConflictResolving((prev) => ({ ...prev, [repo.name]: true }))
+    try {
+      const res = await electronAPI.gitSourcesResolveConflicts(repo.name)
+      if (res.ok) {
+        setPullResults((prev) => {
+          const next = { ...prev }
+          delete next[repo.name]
+          return next
+        })
+        await loadGitRepos()
+        void runUpdateCheck()
+      } else {
+        const msg = res.remainingConflicts?.length
+          ? `${t("Remaining conflicted files:")}\n${res.remainingConflicts.join("\n")}`
+          : res.error || t("Conflict resolution failed")
+        alert(msg)
+      }
+    } finally {
+      setConflictResolving((prev) => ({ ...prev, [repo.name]: false }))
     }
   }
 
@@ -807,14 +891,21 @@ export function ScanSources() {
                               <span>{repo.commitDate}</span>
                             </>
                           )}
-                          {repo.isDirty && (
+                          {repo.hasConflict || pullRes?.status === "conflict" ? (
+                            <span
+                              className="rounded-full bg-red-500/20 border border-red-500/40 px-1.5 py-0.2 text-[10px] font-semibold text-red-400 ml-1"
+                              title={t("Merge conflict in working tree")}
+                            >
+                              {t("Conflict")}
+                            </span>
+                          ) : repo.isDirty ? (
                             <span
                               className="rounded-full bg-amber-500/20 border border-amber-500/40 px-1.5 py-0.2 text-[10px] font-semibold text-amber-400 ml-1"
-                              title="本地仓库包含未提交修改，更新已跳过以防止冲突"
+                              title={t("Local uncommitted modifications")}
                             >
                               {t("Dirty")}
                             </span>
-                          )}
+                          ) : null}
                           {updateCheck?.status === "update-available" && (
                             <span
                               className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-1.5 py-0.2 text-[10px] font-semibold text-emerald-400 ml-1"
@@ -853,16 +944,30 @@ export function ScanSources() {
                                     ? "text-muted"
                                     : pullRes.status === "dirty"
                                     ? "bg-amber-500/20 text-amber-400"
+                                    : pullRes.status === "conflict"
+                                    ? "bg-red-500/20 text-red-400 font-semibold"
                                     : "bg-red-500/20 text-red-400"
                                 }`}
                               >
                                 {pullRes.status === "updated"
-                                  ? `${t("Updated to")} ${pullRes.commit?.slice(0, 7)}`
+                                  ? pullRes.mergedLocalChanges
+                                    ? `${t("Updated & merged")} ${pullRes.commit?.slice(0, 7)}`
+                                    : `${t("Updated to")} ${pullRes.commit?.slice(0, 7)}`
                                   : pullRes.status === "up-to-date"
                                   ? t("Already up to date")
                                   : pullRes.status === "dirty"
                                   ? t("Skipped (dirty)")
+                                  : pullRes.status === "conflict"
+                                  ? t("Conflict")
                                   : t("Failed")}
+                              </span>
+                            ) : repo.hasConflict ? (
+                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded truncate inline-block max-w-full bg-red-500/20 text-red-400">
+                                {t("Conflict")}
+                              </span>
+                            ) : repo.isDirty ? (
+                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded truncate inline-block max-w-full bg-amber-500/20 text-amber-400">
+                                {t("Dirty")}
                               </span>
                             ) : (
                               <span className="text-[10px] text-muted/60 truncate block">
@@ -877,13 +982,21 @@ export function ScanSources() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                void handlePullSingle(repo)
+                                handleInitiatePull(repo)
                               }}
-                              disabled={repo.isDirty || isPulling}
-                              className="rounded-lg border border-border bg-background p-1.5 text-muted hover:text-foreground hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
+                              disabled={isPulling}
+                              className={`rounded-lg border p-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                                repo.hasConflict || pullRes?.status === "conflict"
+                                  ? "border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20"
+                                  : repo.isDirty
+                                  ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                                  : "border-border bg-background text-muted hover:text-foreground hover:bg-surface"
+                              }`}
                               title={
-                                repo.isDirty
-                                  ? "本地有未提交修改，已禁止拉取"
+                                repo.hasConflict || pullRes?.status === "conflict"
+                                  ? t("Conflict detected - click to resolve")
+                                  : repo.isDirty
+                                  ? t("Local modifications - click to choose merge or force update")
                                   : t("Pull latest")
                               }
                             >
@@ -974,11 +1087,15 @@ export function ScanSources() {
                             <h3 className="text-base font-bold text-foreground font-mono truncate">
                               {selectedRepo.displayName}
                             </h3>
-                            {selectedRepo.isDirty && (
+                            {selectedRepo.hasConflict || pullResults[selectedRepo.name]?.status === "conflict" ? (
+                              <span className="shrink-0 rounded-full bg-red-500/20 border border-red-500/40 px-2 py-0.5 text-[10px] font-semibold text-red-400">
+                                {t("Conflict")}
+                              </span>
+                            ) : selectedRepo.isDirty ? (
                               <span className="shrink-0 rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
                                 {t("Dirty")}
                               </span>
-                            )}
+                            ) : null}
                           </div>
                           <div className="flex items-center gap-2 text-[11px] text-muted font-mono mt-1">
                             <span>{selectedRepo.branch || "main"}</span>
@@ -997,6 +1114,41 @@ export function ScanSources() {
 
                         {/* Counts Pill & Batch Actions */}
                         <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleInitiatePull(selectedRepo)}
+                            disabled={pullingRepo[selectedRepo.name]}
+                            className={`rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors flex items-center gap-1.5 disabled:opacity-40 ${
+                              selectedRepo.hasConflict || pullResults[selectedRepo.name]?.status === "conflict"
+                                ? "border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20"
+                                : selectedRepo.isDirty
+                                ? "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                                : "border-border bg-background text-foreground hover:bg-surface"
+                            }`}
+                            title={
+                              selectedRepo.hasConflict || pullResults[selectedRepo.name]?.status === "conflict"
+                                ? t("Conflict detected - click to resolve")
+                                : selectedRepo.isDirty
+                                ? t("Local modifications - click to choose merge or force update")
+                                : t("Pull latest")
+                            }
+                          >
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className={pullingRepo[selectedRepo.name] ? "animate-spin" : ""}
+                            >
+                              <path d="M12 3v12" />
+                              <path d="m8 11 4 4 4-4" />
+                              <path d="M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4" />
+                            </svg>
+                            <span>{pullingRepo[selectedRepo.name] ? t("Updating...") : t("Pull latest")}</span>
+                          </button>
                           {selectedRepo.skills.filter((s) => s.isCoreInstalled).length > 0 && (
                             <button
                               onClick={() => {
@@ -1151,6 +1303,101 @@ export function ScanSources() {
                         </div>
                       )}
                     </div>
+
+                    {/* Conflict Banner */}
+                    {(() => {
+                      const isConflict =
+                        selectedRepo.hasConflict ||
+                        pullResults[selectedRepo.name]?.status === "conflict"
+                      if (!isConflict) return null
+
+                      const conflictedFiles =
+                        selectedRepo.conflictedFiles?.length
+                          ? selectedRepo.conflictedFiles
+                          : pullResults[selectedRepo.name]?.conflictedFiles || []
+
+                      const isAborting = conflictAbortLoading[selectedRepo.name]
+                      const isResolving = conflictResolving[selectedRepo.name]
+
+                      return (
+                        <div className="rounded-2xl border border-red-500/40 bg-red-500/10 p-5 shadow-sm space-y-3">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-base">⚠️</span>
+                              <h4 className="text-[13px] font-bold text-red-400">
+                                {t("Merge Conflict Detected")}
+                              </h4>
+                              <span className="rounded-full bg-red-500/20 border border-red-500/40 px-2 py-0.5 text-[10px] font-semibold text-red-300">
+                                {conflictedFiles.length} {t("conflicted files")}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                onClick={async () => {
+                                  const targetFile = conflictedFiles[0]
+                                  const res = await electronAPI.gitSourcesOpenFile(selectedRepo.name, targetFile)
+                                  if (!res.ok) alert(res.error || t("Failed to open file in editor"))
+                                }}
+                                className="rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-foreground hover:bg-surface transition-colors"
+                              >
+                                {t("Open in Editor to Resolve")}
+                              </button>
+                              <button
+                                onClick={() => void handleCheckResolveConflicts(selectedRepo)}
+                                disabled={isResolving}
+                                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                              >
+                                {isResolving ? t("Resolving...") : t("Mark Resolved")}
+                              </button>
+                              <button
+                                onClick={() => void handleAbortConflict(selectedRepo)}
+                                disabled={isAborting}
+                                className="rounded-lg border border-red-500/40 bg-red-500/20 px-3 py-1.5 text-[11px] font-medium text-red-400 hover:bg-red-500/30 disabled:opacity-50 transition-colors"
+                              >
+                                {isAborting ? t("Aborting...") : t("Abort Merge & Rollback")}
+                              </button>
+                              <button
+                                onClick={() => setDirtySyncModalRepo(selectedRepo)}
+                                disabled={dirtySyncing}
+                                className="rounded-lg border border-border bg-background px-3 py-1.5 text-[11px] font-medium text-muted hover:text-red-400 hover:bg-surface transition-colors"
+                              >
+                                {t("Discard & Align")}
+                              </button>
+                            </div>
+                          </div>
+
+                          <p className="text-[12px] text-muted leading-relaxed">
+                            {t("Local modifications conflict with remote changes. Please resolve conflict markers in the files, or abort to rollback.")}
+                          </p>
+
+                          {conflictedFiles.length > 0 && (
+                            <div className="max-h-48 overflow-y-auto rounded-xl border border-red-500/20 bg-background/80 divide-y divide-border/40 font-mono text-[11px]">
+                              {conflictedFiles.map((file) => (
+                                <div
+                                  key={file}
+                                  className="flex items-center justify-between px-3 py-2 hover:bg-surface/50"
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="text-red-400 font-bold">!</span>
+                                    <span className="text-foreground truncate">{file}</span>
+                                  </div>
+                                  <button
+                                    onClick={async () => {
+                                      const res = await electronAPI.gitSourcesOpenFile(selectedRepo.name, file)
+                                      if (!res.ok) alert(res.error || t("Failed to open file in editor"))
+                                    }}
+                                    className="rounded border border-border bg-background px-2 py-0.5 text-[10px] text-primary hover:bg-surface shrink-0 ml-2"
+                                  >
+                                    {t("Open File")}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {/* Discovered Skills Grid */}
                     {selectedRepo.skills.length === 0 ? (
@@ -1667,6 +1914,102 @@ export function ScanSources() {
                   : batchConfirmModal.action === "remove"
                   ? `${t("Remove from Core")} (${batchConfirmModal.skillNames.length})`
                   : `${t("Install to Core")} (${batchConfirmModal.skillNames.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: DIRTY SYNC STRATEGY SELECTION                                      */}
+      {/* ========================================================================= */}
+      {dirtySyncModalRepo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-border bg-surface p-6 shadow-2xl space-y-4">
+            <div>
+              <h3 className="text-lg font-bold text-foreground mb-1">
+                {t("Sync Repository with Local Changes")}
+              </h3>
+              <p className="text-[12px] text-muted">
+                <span className="font-mono font-semibold text-foreground">
+                  {dirtySyncModalRepo.displayName}
+                </span>{" "}
+                {t("contains local uncommitted changes. Choose how to synchronize with upstream:")}
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {/* Option 1: Stash & Merge */}
+              <div
+                onClick={() => {
+                  if (!dirtySyncing) void handleDirtySyncMerge(dirtySyncModalRepo)
+                }}
+                className="group rounded-xl border border-border bg-background p-4 hover:border-foreground/40 cursor-pointer transition-colors"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-bold text-[13px] text-foreground">
+                        {t("Merge Update (Keep Local Changes)")}
+                      </span>
+                      <span className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                        {t("Recommended")}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted leading-relaxed">
+                      {t(
+                        "Save local modifications via Git Stash, pull remote updates, and re-apply local changes. If conflicts occur, you can resolve them manually.",
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    disabled={dirtySyncing}
+                    className="shrink-0 rounded-lg bg-foreground px-3 py-1.5 text-[11px] font-medium text-background hover:opacity-90 disabled:opacity-40"
+                  >
+                    {dirtySyncing ? t("Updating...") : t("Merge Update")}
+                  </button>
+                </div>
+              </div>
+
+              {/* Option 2: Discard & Reset */}
+              <div
+                onClick={() => {
+                  if (!dirtySyncing) void handleDirtySyncDiscard(dirtySyncModalRepo)
+                }}
+                className="group rounded-xl border border-border bg-background p-4 hover:border-red-500/40 cursor-pointer transition-colors"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-bold text-[13px] text-foreground group-hover:text-red-400 transition-colors">
+                        {t("Discard Local Changes & Force Update")}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted leading-relaxed">
+                      {t(
+                        "Discard local uncommitted changes and align with remote latest. A safety snapshot will be automatically created in ~/.agents/.backup/ to prevent accidental data loss.",
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    disabled={dirtySyncing}
+                    className="shrink-0 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-[11px] font-medium text-red-400 hover:bg-red-500/20 disabled:opacity-40"
+                  >
+                    {dirtySyncing ? t("Updating...") : t("Discard & Align")}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal footer */}
+            <div className="flex justify-end pt-2 border-t border-border">
+              <button
+                type="button"
+                onClick={() => setDirtySyncModalRepo(null)}
+                disabled={dirtySyncing}
+                className="rounded-lg border border-border bg-background px-4 py-2 text-[12px] font-medium text-foreground hover:bg-surface disabled:opacity-40"
+              >
+                {t("Cancel")}
               </button>
             </div>
           </div>

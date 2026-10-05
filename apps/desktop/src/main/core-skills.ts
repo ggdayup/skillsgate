@@ -83,6 +83,35 @@ export interface CoreSyncResult {
   failed: { skill: string; agent: string; error: string }[]
 }
 
+export type CorePruneAction = "unlink" | "backup-and-remove" | "keep-protected"
+
+export interface CorePruneItem {
+  skill: string
+  agent: string
+  displayName: string
+  kind: "symlink" | "directory"
+  path: string
+  action: CorePruneAction
+  backupPath?: string
+  reason?: string
+}
+
+export interface CorePrunePlan {
+  items: CorePruneItem[]
+  agents: string[]
+  coreCount: number
+  totalSymlinks: number
+  totalDirectories: number
+}
+
+export interface CorePruneResult {
+  unlinked: number
+  backedUp: number
+  protected: number
+  failed: { skill: string; agent: string; error: string }[]
+  backupDir?: string
+}
+
 export interface CoreConfig {
   version: number
   exclusions: Record<string, string[]>
@@ -517,6 +546,162 @@ export async function applyCoreSync(plan: CoreSyncPlan): Promise<CoreSyncResult>
 
 export async function syncCore(agents: CoreAgent[]): Promise<CoreSyncResult> {
   return applyCoreSync(await planCoreSync(agents))
+}
+
+// ---------- pruning non-core skills ----------
+
+export const DEFAULT_PROTECTED_SKILLS: Record<string, string[]> = {
+  antigravity: ["agy-status"],
+  "antigravity-cli": ["agy-status"],
+}
+
+export async function planCorePrune(
+  agents: CoreAgent[],
+  protectedSkills?: Record<string, string[]>,
+): Promise<CorePrunePlan> {
+  const core = await listCoreEntries()
+  const coreNames = new Set(core.map((c) => c.name))
+  const coreRealDir = await realpathOrResolve(CORE_SKILLS_DIR)
+
+  const protectedMap: Record<string, string[]> = {
+    ...DEFAULT_PROTECTED_SKILLS,
+    ...(protectedSkills ?? {}),
+  }
+
+  const items: CorePruneItem[] = []
+  let totalSymlinks = 0
+  let totalDirectories = 0
+  const seenRealDirs = new Set<string>()
+  seenRealDirs.add(coreRealDir)
+
+  for (const agent of agents) {
+    const dir = agent.globalSkillsDir
+    const realDir = await realpathOrResolve(dir)
+
+    // Skip agents pointing directly to core or sharing a directory with an already processed agent.
+    if (seenRealDirs.has(realDir)) {
+      continue
+    }
+    seenRealDirs.add(realDir)
+
+    const entries = await readdirSafe(dir)
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue
+      if (coreNames.has(entry.name)) continue
+
+      const target = path.join(dir, entry.name)
+      if (!isPathSafe(target, dir)) continue
+
+      const isProtected = (protectedMap[agent.name] || []).includes(entry.name)
+      let lst
+      try {
+        lst = await fs.lstat(target)
+      } catch {
+        continue
+      }
+
+      const kind = lst.isSymbolicLink() ? "symlink" : "directory"
+
+      if (isProtected) {
+        items.push({
+          skill: entry.name,
+          agent: agent.name,
+          displayName: agent.displayName,
+          kind,
+          path: target,
+          action: "keep-protected",
+          reason: "受保护的工具专属技能",
+        })
+        continue
+      }
+
+      if (kind === "symlink") {
+        totalSymlinks += 1
+        items.push({
+          skill: entry.name,
+          agent: agent.name,
+          displayName: agent.displayName,
+          kind: "symlink",
+          path: target,
+          action: "unlink",
+        })
+      } else if (kind === "directory") {
+        totalDirectories += 1
+        items.push({
+          skill: entry.name,
+          agent: agent.name,
+          displayName: agent.displayName,
+          kind: "directory",
+          path: target,
+          action: "backup-and-remove",
+        })
+      }
+    }
+  }
+
+  return {
+    items,
+    agents: agents.map((a) => a.name),
+    coreCount: core.length,
+    totalSymlinks,
+    totalDirectories,
+  }
+}
+
+export async function applyCorePrune(
+  plan: CorePrunePlan,
+): Promise<CorePruneResult> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+  const backupBase = path.join(BACKUP_DIR, `prune--${stamp}`)
+  const result: CorePruneResult = {
+    unlinked: 0,
+    backedUp: 0,
+    protected: 0,
+    failed: [],
+  }
+
+  for (const item of plan.items) {
+    if (item.action === "keep-protected") {
+      result.protected += 1
+      continue
+    }
+
+    if (item.action === "unlink") {
+      try {
+        const lst = await fs.lstat(item.path)
+        if (lst.isSymbolicLink()) {
+          await fs.unlink(item.path)
+          result.unlinked += 1
+        }
+      } catch (err) {
+        result.failed.push({
+          skill: item.skill,
+          agent: item.agent,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      continue
+    }
+
+    if (item.action === "backup-and-remove") {
+      try {
+        const targetBackup = path.join(backupBase, item.agent, item.skill)
+        await fs.mkdir(path.dirname(targetBackup), { recursive: true })
+        await movePath(item.path, targetBackup)
+        result.backedUp += 1
+        result.backupDir = backupBase
+      } catch (err) {
+        result.failed.push({
+          skill: item.skill,
+          agent: item.agent,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      continue
+    }
+  }
+
+  return result
 }
 
 // ---------- status ----------
@@ -978,6 +1163,119 @@ export async function promoteToCore(
   } catch (err) {
     return { ok: false, path: dst, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+export interface CoreBatchAddSkillInput {
+  name: string
+  canonicalPath: string
+}
+
+export interface CoreBatchAddResult {
+  added: number
+  already: number
+  failed: Array<{ name: string; error: string }>
+}
+
+export async function batchAddToCore(
+  skills: CoreBatchAddSkillInput[],
+  agents: CoreAgent[],
+): Promise<CoreBatchAddResult> {
+  const result: CoreBatchAddResult = {
+    added: 0,
+    already: 0,
+    failed: [],
+  }
+
+  await fs.mkdir(CORE_SKILLS_DIR, { recursive: true })
+
+  const agentDirs = await Promise.all(
+    agents.map(async (a) => ({
+      agent: a,
+      realDir: await realpathOrResolve(a.globalSkillsDir),
+    })),
+  )
+
+  let anyAdded = false
+
+  for (const skill of skills) {
+    const safeName = sanitizeName(skill.name)
+    const target = path.join(CORE_SKILLS_DIR, safeName)
+
+    if (!isPathSafe(target, CORE_SKILLS_DIR)) {
+      result.failed.push({ name: skill.name, error: "路径越界" })
+      continue
+    }
+
+    try {
+      const srcReal = await realpathOrResolve(skill.canonicalPath)
+      const targetExists = await pathExists(target)
+
+      if (targetExists) {
+        let isBrokenLink = false
+        try {
+          await fs.stat(target)
+        } catch {
+          const lst = await fs.lstat(target).catch(() => null)
+          if (lst?.isSymbolicLink()) {
+            isBrokenLink = true
+          }
+        }
+
+        if (isBrokenLink) {
+          await fs.unlink(target)
+        } else {
+          const targetReal = await realpathOrResolve(target)
+          if (srcReal === targetReal) {
+            result.already += 1
+            continue
+          } else {
+            result.failed.push({
+              name: skill.name,
+              error: `core 中已存在同名技能 ${safeName}`,
+            })
+            continue
+          }
+        }
+      }
+
+      const owningAgent = agentDirs.find(
+        (ad) => srcReal === ad.realDir || srcReal.startsWith(ad.realDir + path.sep),
+      )
+
+      if (owningAgent) {
+        await movePath(srcReal, target)
+        result.added += 1
+        anyAdded = true
+      } else {
+        const res = await installDirToCore(srcReal, safeName, { mode: "link" })
+        if (res.ok) {
+          if (res.already) {
+            result.already += 1
+          } else {
+            result.added += 1
+            anyAdded = true
+          }
+        } else {
+          result.failed.push({
+            name: skill.name,
+            error: res.error || "添加失败",
+          })
+        }
+      }
+    } catch (err) {
+      result.failed.push({
+        name: skill.name,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  if (anyAdded) {
+    const plan = await planCoreSync(agents)
+    await applyCoreSync(plan)
+  }
+
+  return result
 }
 
 export async function replaceConflictWithCoreLink(

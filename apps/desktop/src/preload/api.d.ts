@@ -175,6 +175,35 @@ declare global {
     failed: { skill: string; agent: string; error: string }[]
   }
 
+  type CorePruneAction = "unlink" | "backup-and-remove" | "keep-protected"
+
+  interface CorePruneItem {
+    skill: string
+    agent: string
+    displayName: string
+    kind: "symlink" | "directory"
+    path: string
+    action: CorePruneAction
+    backupPath?: string
+    reason?: string
+  }
+
+  interface CorePrunePlan {
+    items: CorePruneItem[]
+    agents: string[]
+    coreCount: number
+    totalSymlinks: number
+    totalDirectories: number
+  }
+
+  interface CorePruneResult {
+    unlinked: number
+    backedUp: number
+    protected: number
+    failed: { skill: string; agent: string; error: string }[]
+    backupDir?: string
+  }
+
   interface CoreConfig {
     version: number
     exclusions: Record<string, string[]>
@@ -243,13 +272,21 @@ declare global {
     commitMessage: string
     commitDate: string
     isDirty: boolean
+    hasConflict?: boolean
+    conflictedFiles?: string[]
     skills: GitRepoSkillSummary[]
   }
 
+  type GitSyncStrategy = "ff-only" | "stash-merge" | "discard-reset"
+
   interface GitRepoSyncResult {
-    status: "updated" | "up-to-date" | "dirty" | "error"
+    status: "updated" | "up-to-date" | "dirty" | "conflict" | "error"
     commit?: string
     error?: string
+    mergedLocalChanges?: boolean
+    conflictedFiles?: string[]
+    backupPath?: string
+    prePullCommit?: string
   }
 
   /**
@@ -302,7 +339,10 @@ declare global {
     // Git Sources
     gitSourcesList: () => Promise<GitRepoSummary[]>
     gitSourcesAdd: (url: string) => Promise<{ ok: boolean; repo?: GitRepoSummary; error?: string }>
-    gitSourcesPull: (repoName: string) => Promise<GitRepoSyncResult>
+    gitSourcesPull: (repoName: string, strategy?: GitSyncStrategy) => Promise<GitRepoSyncResult>
+    gitSourcesAbortConflict: (repoName: string, prePullCommit?: string) => Promise<{ ok: boolean; error?: string }>
+    gitSourcesResolveConflicts: (repoName: string) => Promise<{ ok: boolean; remainingConflicts?: string[]; error?: string }>
+    gitSourcesOpenFile: (repoName: string, relativePath?: string) => Promise<{ ok: boolean; error?: string }>
     /**
      * Pulls every tracked repo, then re-reads them. Returns the fresh list plus
      * the per-repo sync outcome, so the renderer never needs a second round trip
@@ -373,7 +413,7 @@ declare global {
       Array<{
         repo: string
         name: string
-        status: "updated" | "up-to-date" | "dirty" | "error"
+        status: "updated" | "up-to-date" | "dirty" | "conflict" | "error"
         commit?: string
         error?: string
       }>
@@ -403,7 +443,20 @@ declare global {
     coreStatus: () => Promise<CoreStatusEntry[]>
     corePlan: () => Promise<CoreSyncPlan>
     coreSync: () => Promise<{ plan: CoreSyncPlan; result: CoreSyncResult }>
+    corePrunePlan: () => Promise<CorePrunePlan>
+    corePruneApply: () => Promise<{
+      prunePlan: CorePrunePlan
+      pruneResult: CorePruneResult
+      syncResult: CoreSyncResult
+    }>
     corePromote: (skillName: string, agentName: string) => Promise<{ ok: boolean; path: string }>
+    coreBatchAdd: (
+      skills: Array<{ name: string; canonicalPath: string }>,
+    ) => Promise<{
+      added: number
+      already: number
+      failed: Array<{ name: string; error: string }>
+    }>
     coreRemove: (
       skillName: string,
       mode?: "detach" | "purge",

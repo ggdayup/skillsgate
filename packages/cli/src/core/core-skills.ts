@@ -18,6 +18,10 @@ import {
   CoreConfig,
   CoreInstallOptions,
   CoreInstallOutcome,
+  CorePruneAction,
+  CorePruneItem,
+  CorePrunePlan,
+  CorePruneResult,
   CoreStatusEntry,
   CoreSyncItem,
   CoreSyncPlan,
@@ -528,6 +532,188 @@ export async function syncCore(
   opts: CoreSyncOptions = {},
 ): Promise<CoreSyncResult> {
   return applyCoreSync(await planCoreSync(opts));
+}
+
+// ---------- pruning non-core skills ----------
+
+export interface CorePruneOptions {
+  /** Restrict to these agents. Default: every detected agent. */
+  agentNames?: AgentType[];
+  /** Agent instances passed directly (e.g. from desktop mirror). */
+  agents?: AgentConfig[];
+  /** Whitelist of skills to protect per agent. Default protects agy-status in antigravity-cli. */
+  protectedSkills?: Record<string, string[]>;
+}
+
+export const DEFAULT_PROTECTED_SKILLS: Record<string, string[]> = {
+  antigravity: ["agy-status"],
+  "antigravity-cli": ["agy-status"],
+};
+
+export async function planCorePrune(
+  opts: CorePruneOptions = {},
+): Promise<CorePrunePlan> {
+  const core = await listCoreEntries();
+  const coreNames = new Set(core.map((c) => c.name));
+  const coreRealDir = await realpathOrResolve(CORE_SKILLS_DIR());
+
+  const detected = opts.agents
+    ? opts.agents
+    : opts.agentNames
+      ? opts.agentNames
+          .map((n) => agents[n])
+          .filter((a): a is AgentConfig => Boolean(a))
+      : await detectInstalledAgents();
+
+  const protectedMap: Record<string, string[]> = {
+    ...DEFAULT_PROTECTED_SKILLS,
+    ...(opts.protectedSkills ?? {}),
+  };
+
+  const items: CorePruneItem[] = [];
+  let totalSymlinks = 0;
+  let totalDirectories = 0;
+  const seenRealDirs = new Set<string>();
+  seenRealDirs.add(coreRealDir);
+
+  for (const agent of detected) {
+    const dir = agent.globalSkillsDir;
+    const realDir = await realpathOrResolve(dir);
+
+    // Skip agents pointing directly to core or sharing a directory with an already processed agent.
+    if (seenRealDirs.has(realDir)) {
+      continue;
+    }
+    seenRealDirs.add(realDir);
+
+    const entries = await readdirSafe(dir);
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      if (coreNames.has(entry.name)) continue;
+
+      const target = path.join(dir, entry.name);
+      if (!isPathSafe(target, dir)) continue;
+
+      const isProtected = (protectedMap[agent.name] || []).includes(entry.name);
+      let lst;
+      try {
+        lst = await fs.lstat(target);
+      } catch {
+        continue;
+      }
+
+      const kind = lst.isSymbolicLink() ? "symlink" : "directory";
+
+      if (isProtected) {
+        items.push({
+          skill: entry.name,
+          agent: agent.name,
+          displayName: agent.displayName,
+          kind,
+          path: target,
+          action: "keep-protected",
+          reason: "受保护的工具专属技能",
+        });
+        continue;
+      }
+
+      if (kind === "symlink") {
+        totalSymlinks += 1;
+        items.push({
+          skill: entry.name,
+          agent: agent.name,
+          displayName: agent.displayName,
+          kind: "symlink",
+          path: target,
+          action: "unlink",
+        });
+      } else if (kind === "directory") {
+        totalDirectories += 1;
+        items.push({
+          skill: entry.name,
+          agent: agent.name,
+          displayName: agent.displayName,
+          kind: "directory",
+          path: target,
+          action: "backup-and-remove",
+        });
+      }
+    }
+  }
+
+  return {
+    items,
+    agents: detected.map((a) => a.name),
+    coreCount: core.length,
+    totalSymlinks,
+    totalDirectories,
+  };
+}
+
+export async function applyCorePrune(
+  plan: CorePrunePlan,
+): Promise<CorePruneResult> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupBase = path.join(BACKUP_DIR(), `prune--${stamp}`);
+  const result: CorePruneResult = {
+    unlinked: 0,
+    backedUp: 0,
+    protected: 0,
+    failed: [],
+  };
+
+  for (const item of plan.items) {
+    if (item.action === "keep-protected") {
+      result.protected += 1;
+      continue;
+    }
+
+    if (item.action === "unlink") {
+      try {
+        const lst = await fs.lstat(item.path);
+        if (lst.isSymbolicLink()) {
+          await fs.unlink(item.path);
+          result.unlinked += 1;
+        }
+      } catch (err) {
+        result.failed.push({
+          skill: item.skill,
+          agent: item.agent,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      continue;
+    }
+
+    if (item.action === "backup-and-remove") {
+      try {
+        const targetBackup = path.join(backupBase, item.agent, item.skill);
+        await fs.mkdir(path.dirname(targetBackup), { recursive: true });
+        await movePath(item.path, targetBackup);
+        result.backedUp += 1;
+        result.backupDir = backupBase;
+      } catch (err) {
+        result.failed.push({
+          skill: item.skill,
+          agent: item.agent,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      continue;
+    }
+  }
+
+  return result;
+}
+
+export async function pruneAndSyncCore(
+  opts: CorePruneOptions = {},
+): Promise<{ pruneResult: CorePruneResult; syncResult: CoreSyncResult }> {
+  const prunePlan = await planCorePrune(opts);
+  const pruneResult = await applyCorePrune(prunePlan);
+  const syncPlan = await planCoreSync({ agentNames: prunePlan.agents });
+  const syncResult = await applyCoreSync(syncPlan);
+  return { pruneResult, syncResult };
 }
 
 // ---------- status ----------

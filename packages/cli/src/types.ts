@@ -187,6 +187,35 @@ export interface CoreInstallOutcome {
   conflict?: boolean;
 }
 
+export type CorePruneAction = "unlink" | "backup-and-remove" | "keep-protected";
+
+export interface CorePruneItem {
+  skill: string;
+  agent: AgentType;
+  displayName: string;
+  kind: "symlink" | "directory";
+  path: string;
+  action: CorePruneAction;
+  backupPath?: string;
+  reason?: string;
+}
+
+export interface CorePrunePlan {
+  items: CorePruneItem[];
+  agents: AgentType[];
+  coreCount: number;
+  totalSymlinks: number;
+  totalDirectories: number;
+}
+
+export interface CorePruneResult {
+  unlinked: number;
+  backedUp: number;
+  protected: number;
+  failed: { skill: string; agent: AgentType; error: string }[];
+  backupDir?: string;
+}
+
 // ---------- Publish Types ----------
 
 export interface PublishSkillMetadata {
