@@ -133,6 +133,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   gitSourcesRefresh: () => ipcRenderer.invoke("git-sources:refresh"),
   onGitSourcesProgress: (callback: (progress: GitRefreshProgress) => void) =>
     subscribe("git-sources:progress", callback),
+  gitSourcesCheckUpdates: () => ipcRenderer.invoke("git-sources:check-updates"),
+  onGitSourcesUpdatesAvailable: (callback: (payload: GitUpdatesAvailable) => void) =>
+    subscribe("git-sources:updates-available", callback),
   gitSourcesRemove: (repoName: string, action: string) =>
     ipcRenderer.invoke("git-sources:remove", repoName, action),
 

@@ -32,6 +32,24 @@ function formatDuration(ms: number): string {
 }
 
 /**
+ * Renders a last-checked stamp as the user reads it: `14:32` today,
+ * `10-4 14:32` otherwise. Coarse by design — it answers "is this fresh?",
+ * not "exactly when?".
+ */
+function formatCheckedAt(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const hh = String(d.getHours()).padStart(2, "0")
+  const mm = String(d.getMinutes()).padStart(2, "0")
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  if (sameDay) return `${hh}:${mm}`
+  return `${d.getMonth() + 1}-${d.getDate()} ${hh}:${mm}`
+}
+
+/**
  * The settled state of a refresh. Leads with the delta, because "what changed"
  * is the question the user clicked Refresh to answer; the counts are the
  * fallback when nothing changed.
@@ -144,6 +162,13 @@ export function ScanSources() {
   const [refreshProgress, setRefreshProgress] = useState<GitRefreshProgress | null>(null)
   const [refreshSummary, setRefreshSummary] = useState<RefreshSummary | null>(null)
   const [elapsed, setElapsed] = useState(0)
+  // --- Remote update discovery (read-only; pulling stays explicit) ---
+  const [updateChecks, setUpdateChecks] = useState<Record<string, GitUpdateCheck>>({})
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(null)
+  const [checkingUpdates, setCheckingUpdates] = useState(false)
+  // View-open, background-event, and post-pull re-checks can otherwise pile
+  // onto the same timeout-bound round trips.
+  const checkingUpdatesRef = useRef(false)
   const [installingSkill, setInstallingSkill] = useState<string | null>(null)
   const [removingSkill, setRemovingSkill] = useState<string | null>(null)
   const [batchRemovingCore, setBatchRemovingCore] = useState(false)
@@ -170,7 +195,19 @@ export function ScanSources() {
   // Load initial data
   useEffect(() => {
     loadLocalPaths()
-    loadGitRepos()
+    // The list is local disk state; the update check that follows is what
+    // tells the user whether upstream moved since the last pull.
+    void loadGitRepos().then(() => {
+      void runUpdateCheck()
+    })
+  }, [])
+
+  // The 24h background check pushes its full result, so the page just merges
+  // it — no second round trip needed to learn what changed.
+  useEffect(() => {
+    return electronAPI.onGitSourcesUpdatesAvailable((payload) => {
+      applyUpdateCheckResult(payload)
+    })
   }, [])
 
   // Progress events only matter while the Sources page is mounted, so subscribe
@@ -225,6 +262,30 @@ export function ScanSources() {
     }
   }
 
+  function applyUpdateCheckResult(result: GitUpdateCheckResult) {
+    setUpdateChecks(result.checks)
+    setLastCheckedAt(result.checkedAt)
+  }
+
+  /**
+   * Read-only remote check over every tracked repo. Never pulls, never writes.
+   * A transport failure keeps the previous markers rather than clearing them —
+   * no signal is more honest than a false "everything is up to date".
+   */
+  async function runUpdateCheck() {
+    if (checkingUpdatesRef.current) return
+    checkingUpdatesRef.current = true
+    setCheckingUpdates(true)
+    try {
+      applyUpdateCheckResult(await electronAPI.gitSourcesCheckUpdates())
+    } catch {
+      // Keep previous markers on transport failure.
+    } finally {
+      checkingUpdatesRef.current = false
+      setCheckingUpdates(false)
+    }
+  }
+
   async function persistLocalPaths(next: string[]) {
     setSavingLocal(true)
     try {
@@ -242,6 +303,9 @@ export function ScanSources() {
       const res = await electronAPI.gitSourcesPull(repo.name)
       setPullResults((prev) => ({ ...prev, [repo.name]: res }))
       await loadGitRepos()
+      // A pull moves local HEAD, so any update-available marker for this repo
+      // is stale. Re-check rather than guessing the new state.
+      void runUpdateCheck()
     } catch (err: unknown) {
       setPullResults((prev) => ({
         ...prev,
@@ -309,6 +373,9 @@ export function ScanSources() {
         addedSkills: [...afterSkills].filter((name) => !beforeSkills.has(name)).length,
         removedSkills: [...beforeSkills].filter((name) => !afterSkills.has(name)).length,
       })
+
+      // Same staleness reasoning as the single pull above.
+      void runUpdateCheck()
     } catch (err: unknown) {
       setGitError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -427,6 +494,9 @@ export function ScanSources() {
   }, [selectedRepo, skillSearch])
 
   const totalDiscoveredSkills = gitRepos.reduce((acc, r) => acc + r.skills.length, 0)
+  const updateAvailableCount = Object.values(updateChecks).filter(
+    (check) => check.status === "update-available",
+  ).length
 
   return (
     <div className="flex-1 overflow-y-auto px-8 py-6">
@@ -478,6 +548,30 @@ export function ScanSources() {
                 <span className="rounded-full bg-border/60 px-2 py-0.5 text-[11px] font-medium text-muted">
                   {gitRepos.length} repos · {totalDiscoveredSkills} skills
                 </span>
+                {checkingUpdates ? (
+                  <span className="text-[11px] text-muted">
+                    {t("Checking for updates...")}
+                  </span>
+                ) : (
+                  <>
+                    {updateAvailableCount > 0 && (
+                      <span className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
+                        {(updateAvailableCount === 1
+                          ? t("{n} source has updates")
+                          : t("{n} sources have updates")
+                        ).replace("{n}", String(updateAvailableCount))}
+                      </span>
+                    )}
+                    {lastCheckedAt !== null && (
+                      <span className="text-[11px] text-muted/70 font-mono">
+                        {t("Last checked {time}").replace(
+                          "{time}",
+                          formatCheckedAt(lastCheckedAt),
+                        )}
+                      </span>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
@@ -652,6 +746,7 @@ export function ScanSources() {
                     const isSelected = selectedRepo?.name === repo.name
                     const isPulling = pullingRepo[repo.name] ?? false
                     const pullRes = pullResults[repo.name]
+                    const updateCheck = updateChecks[repo.name]
 
                     return (
                       <div
@@ -718,6 +813,26 @@ export function ScanSources() {
                               title="本地仓库包含未提交修改，更新已跳过以防止冲突"
                             >
                               {t("Dirty")}
+                            </span>
+                          )}
+                          {updateCheck?.status === "update-available" && (
+                            <span
+                              className="rounded-full bg-emerald-500/20 border border-emerald-500/40 px-1.5 py-0.2 text-[10px] font-semibold text-emerald-400 ml-1"
+                              title={t(
+                                "Pull updates the repo in place. Symlink installs take effect immediately; copied installs need a re-sync.",
+                              )}
+                            >
+                              {t("Update available: {local} → {remote}")
+                                .replace("{local}", (updateCheck.local ?? "").slice(0, 7))
+                                .replace("{remote}", (updateCheck.remote ?? "").slice(0, 7))}
+                            </span>
+                          )}
+                          {updateCheck?.status === "unknown" && (
+                            <span
+                              className="text-[10px] text-muted/60 ml-1"
+                              title={updateCheck.error ?? ""}
+                            >
+                              {t("Remote check failed")}
                             </span>
                           )}
                         </div>

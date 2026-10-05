@@ -325,6 +325,15 @@ export const zhCN: Record<string, string> = {
   "−{n} skill": "−{n} 个技能",
   "−{n} skills": "−{n} 个技能",
   repos: "个仓库",
+  // Remote update discovery (read-only check, pulling stays explicit)
+  "Checking for updates...": "正在检查更新…",
+  "{n} source has updates": "{n} 个源有更新",
+  "{n} sources have updates": "{n} 个源有更新",
+  "Last checked {time}": "上次检查 {time}",
+  "Update available: {local} → {remote}": "有远端更新：{local} → {remote}",
+  "Remote check failed": "远端检查失败",
+  "Pull updates the repo in place. Symlink installs take effect immediately; copied installs need a re-sync.":
+    "拉取会直接更新仓库。链接安装的技能即时生效；拷贝安装的技能需要重新同步。",
 
   installed: "已安装",
   skills: "个技能",

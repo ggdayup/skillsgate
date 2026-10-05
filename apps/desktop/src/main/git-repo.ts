@@ -326,3 +326,111 @@ export async function syncGitRepo(repoDir: string): Promise<RepoSyncResult> {
     commit,
   }
 }
+
+// ---------------------------------------------------------------------------
+// Remote update discovery (read-only: never writes to the working tree)
+// ---------------------------------------------------------------------------
+
+export type GitUpdateStatus = "up-to-date" | "update-available" | "unknown"
+
+export interface GitUpdateCheck {
+  status: GitUpdateStatus
+  /** Full local HEAD SHA, when it could be read. */
+  local?: string
+  /** Full remote HEAD SHA, when it could be read. */
+  remote?: string
+  /** Why the check is unknown. Never shown as up-to-date on failure. */
+  error?: string
+}
+
+/** One network round trip per repo; failures degrade to unknown, never block. */
+export const UPDATE_CHECK_TIMEOUT_MS = 15_000
+
+/** Automatic re-check interval. Fixed at 24h by product decision. */
+export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+export interface UpdateCheckWindow {
+  startHour: number
+  endHour: number
+}
+
+/**
+ * Parse `git ls-remote origin HEAD` output into a remote SHA.
+ * Pure function so the parsing (vs the network) is unit-testable.
+ */
+export function parseLsRemoteHead(stdout: string): string | null {
+  const firstLine = stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0)
+  if (!firstLine) return null
+  const sha = firstLine.split(/\s+/)[0] ?? ""
+  return /^[0-9a-f]{40}$/i.test(sha) ? sha.toLowerCase() : null
+}
+
+/** Read the remote HEAD SHA without touching the working tree. Null on any failure. */
+export async function getRemoteHead(
+  repoDir: string,
+  timeoutMs = UPDATE_CHECK_TIMEOUT_MS,
+): Promise<string | null> {
+  const res = await gitExec(["ls-remote", "origin", "HEAD"], repoDir, timeoutMs)
+  if (!res.success) return null
+  return parseLsRemoteHead(res.stdout)
+}
+
+/**
+ * Compare local HEAD against remote HEAD.
+ * Works on the existing shallow clones: no fetch, no local writes.
+ * A dirty tree still reports availability — pulling stays blocked elsewhere,
+ * but the user deserves to know an update exists (see story 10 of the spec).
+ */
+export async function checkRemoteUpdate(
+  repoDir: string,
+  timeoutMs = UPDATE_CHECK_TIMEOUT_MS,
+): Promise<GitUpdateCheck> {
+  const localRes = await gitExec(["rev-parse", "HEAD"], repoDir, timeoutMs)
+  const local = localRes.success ? localRes.stdout.trim() : ""
+  if (!local) {
+    return { status: "unknown", error: localRes.error ?? "无法读取本地提交" }
+  }
+
+  const remote = await getRemoteHead(repoDir, timeoutMs)
+  if (!remote) {
+    return { status: "unknown", local, error: "无法读取远端提交（离线或无权限？）" }
+  }
+
+  return local === remote
+    ? { status: "up-to-date", local, remote }
+    : { status: "update-available", local, remote }
+}
+
+/**
+ * Whether the once-per-24h automatic check should run now.
+ * Pure function of (now, last run, quiet window) so the scheduling policy is
+ * unit-testable without timers. Assumes startHour < endHour (validated upstream).
+ *
+ * - Inside the window: run when the last check is older than 24h.
+ * - Past the window: catch up once when nothing ran since the window started
+ *   (covers machine-asleep / app-closed); the next startup/view-open check
+ *   covers anything older.
+ * - Before the window: wait for it, even when stale — the window exists to
+ *   keep daytime hours quiet.
+ */
+export function shouldRunScheduledCheck(
+  nowMs: number,
+  lastCheckedAtMs: number,
+  window: UpdateCheckWindow,
+): boolean {
+  if (nowMs - lastCheckedAtMs < UPDATE_CHECK_INTERVAL_MS) return false
+
+  const start = new Date(nowMs)
+  start.setHours(window.startHour, 0, 0, 0)
+  const end = new Date(nowMs)
+  end.setHours(window.endHour, 0, 0, 0)
+  const startMs = start.getTime()
+  const endMs = end.getTime()
+
+  if (nowMs >= startMs && nowMs < endMs) return true
+  if (nowMs >= endMs && lastCheckedAtMs < startMs) return true
+  return false
+}

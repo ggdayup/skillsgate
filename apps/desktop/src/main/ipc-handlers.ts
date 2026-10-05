@@ -1,4 +1,4 @@
-import { ipcMain, shell, type BrowserWindow } from "electron"
+import { ipcMain, shell, powerMonitor, type BrowserWindow } from "electron"
 import os from "node:os"
 import path from "node:path"
 import fs from "node:fs/promises"
@@ -74,6 +74,9 @@ import {
   getGitBranch,
   getGitLatestLog,
   getRepoDisplayName,
+  checkRemoteUpdate,
+  shouldRunScheduledCheck,
+  type GitUpdateCheck,
 } from "./git-repo"
 
 // ---------------------------------------------------------------------------
@@ -1843,8 +1846,140 @@ function broadcastGitRefresh(progress: GitRefreshProgress): void {
   _mainWindow.webContents.send("git-sources:progress", progress)
 }
 
+// ---------------------------------------------------------------------------
+// Remote update discovery (read-only: never pulls, never touches dirty trees)
+// ---------------------------------------------------------------------------
+
+const GIT_UPDATE_CHECK_ENABLED_KEY = "git.updateCheckEnabled"
+const GIT_UPDATE_CHECK_WINDOW_START_KEY = "git.updateCheckWindowStart"
+const GIT_UPDATE_CHECK_WINDOW_END_KEY = "git.updateCheckWindowEnd"
+const GIT_LAST_UPDATE_CHECK_AT_KEY = "git.lastUpdateCheckAt"
+
+/** Quiet-hours defaults: a 24h interval anchored at 03:00–05:00 local time. */
+const DEFAULT_UPDATE_CHECK_WINDOW = { startHour: 3, endHour: 5 }
+/** How often the scheduler wakes up to ask whether a check is due. */
+const UPDATE_CHECK_SCHEDULER_TICK_MS = 15 * 60 * 1000
+/** Skip the background check while the user is actively at the machine. */
+const UPDATE_CHECK_IDLE_SECONDS = 60
+
+/** One in-flight check at a time: the view-open check and the scheduler share it. */
+let updateCheckInFlight: Promise<GitUpdateCheckResult> | null = null
+let updateCheckSchedulerStarted = false
+
+function clampHour(value: unknown, fallback: number): number {
+  const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback
+  return Math.min(23, Math.max(0, n))
+}
+
+/**
+ * Read-only remote check over every tracked repo with bounded concurrency, so
+ * one slow remote never blocks the rest. Records when it ran; pulling stays
+ * an explicit user action behind the existing Pull / Refresh buttons.
+ */
+async function runGitUpdateChecks(): Promise<GitUpdateCheckResult> {
+  if (updateCheckInFlight) return updateCheckInFlight
+
+  updateCheckInFlight = (async () => {
+    ensureStores()
+    const names: string[] = []
+    if (await dirExists(STORE_REPOS_DIR)) {
+      const entries = await fs.readdir(STORE_REPOS_DIR, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        if (await dirExists(path.join(STORE_REPOS_DIR, entry.name, ".git"))) {
+          names.push(entry.name)
+        }
+      }
+    }
+    names.sort()
+
+    const checks: Record<string, GitUpdateCheck> = {}
+    let cursor = 0
+    async function worker(): Promise<void> {
+      while (cursor < names.length) {
+        const name = names[cursor++]
+        checks[name] = await checkRemoteUpdate(path.join(STORE_REPOS_DIR, name))
+      }
+    }
+    const workers = Math.min(4, Math.max(names.length, 1))
+    await Promise.all(Array.from({ length: workers }, worker))
+
+    const checkedAt = Date.now()
+    settingsStore.set(GIT_LAST_UPDATE_CHECK_AT_KEY, checkedAt)
+    return { checks, checkedAt }
+  })().finally(() => {
+    updateCheckInFlight = null
+  })
+
+  return updateCheckInFlight
+}
+
+function broadcastGitUpdatesAvailable(result: GitUpdateCheckResult): void {
+  if (!_mainWindow || _mainWindow.isDestroyed()) return
+  const count = Object.values(result.checks).filter(
+    (check) => check.status === "update-available",
+  ).length
+  if (count === 0) return
+  _mainWindow.webContents.send("git-sources:updates-available", {
+    count,
+    checkedAt: result.checkedAt,
+    checks: result.checks,
+  } satisfies GitUpdatesAvailable)
+}
+
+/**
+ * The once-per-24h background check. Fires only inside the quiet-hours window
+ * (or once past it when the window was missed), only when the machine is idle,
+ * and never while another check is running.
+ */
+async function runScheduledGitUpdateCheck(): Promise<void> {
+  try {
+    ensureStores()
+    if (!settingsStore.get(GIT_UPDATE_CHECK_ENABLED_KEY, true)) return
+    if (updateCheckInFlight) return
+
+    const window = {
+      startHour: clampHour(
+        settingsStore.get(GIT_UPDATE_CHECK_WINDOW_START_KEY, DEFAULT_UPDATE_CHECK_WINDOW.startHour),
+        DEFAULT_UPDATE_CHECK_WINDOW.startHour,
+      ),
+      endHour: clampHour(
+        settingsStore.get(GIT_UPDATE_CHECK_WINDOW_END_KEY, DEFAULT_UPDATE_CHECK_WINDOW.endHour),
+        DEFAULT_UPDATE_CHECK_WINDOW.endHour,
+      ),
+    }
+    if (window.endHour <= window.startHour) return
+    const lastCheckedAt = settingsStore.get(GIT_LAST_UPDATE_CHECK_AT_KEY, 0)
+    if (!shouldRunScheduledCheck(Date.now(), lastCheckedAt, window)) return
+
+    try {
+      if (powerMonitor.getSystemIdleTime() < UPDATE_CHECK_IDLE_SECONDS) return
+    } catch {
+      // powerMonitor is unavailable in some environments; the quiet-hours
+      // window is still a good enough signal to proceed.
+    }
+
+    broadcastGitUpdatesAvailable(await runGitUpdateChecks())
+  } catch (err) {
+    console.warn("[git-sources] scheduled update check failed", err)
+  }
+}
+
+function startGitUpdateCheckScheduler(): void {
+  if (updateCheckSchedulerStarted) return
+  updateCheckSchedulerStarted = true
+  const tick = () => {
+    void runScheduledGitUpdateCheck()
+  }
+  const timer = setInterval(tick, UPDATE_CHECK_SCHEDULER_TICK_MS)
+  if (typeof timer.unref === "function") timer.unref()
+  // One delayed check shortly after startup covers a missed quiet window.
+  setTimeout(tick, 60_000)
+}
+
 export function registerIpcHandlers(): void {
   console.log("[ipc] registerIpcHandlers initialized")
+  startGitUpdateCheckScheduler()
   // Detect which agents are installed on this machine
   ipcMain.handle("agents:detect", async () => {
     return detectAgents()
@@ -2998,6 +3133,13 @@ Add your skill instructions here.
         return { status: "error", error: `Repository not found: ${repoName}` }
       }
       return syncGitRepo(repoDir)
+    },
+  )
+
+  ipcMain.handle(
+    "git-sources:check-updates",
+    async (): Promise<GitUpdateCheckResult> => {
+      return runGitUpdateChecks()
     },
   )
 

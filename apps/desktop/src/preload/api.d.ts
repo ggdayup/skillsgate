@@ -253,6 +253,35 @@ declare global {
   }
 
   /**
+   * Outcome of the read-only remote check for one tracked repo. `unknown`
+   * means the check itself failed (offline, no permission) — it is never
+   * reported as up-to-date on failure.
+   */
+  interface GitUpdateCheck {
+    status: "up-to-date" | "update-available" | "unknown"
+    /** Full local HEAD SHA, when it could be read. */
+    local?: string
+    /** Full remote HEAD SHA, when it could be read. */
+    remote?: string
+    error?: string
+  }
+
+  interface GitUpdateCheckResult {
+    checks: Record<string, GitUpdateCheck>
+    checkedAt: number
+  }
+
+  /**
+   * Pushed from main when the 24h background check finds outdated sources.
+   * Carries the full checks so the renderer never needs a second round trip.
+   */
+  interface GitUpdatesAvailable {
+    count: number
+    checkedAt: number
+    checks: Record<string, GitUpdateCheck>
+  }
+
+  /**
    * One frame of `git-sources:refresh` progress, pushed from main while the
    * refresh runs. `startedAt` is a Date.now() stamp so the renderer can show a
    * live elapsed timer without having to guess when the refresh began.
@@ -284,6 +313,15 @@ declare global {
       sync: Record<string, GitRepoSyncResult>
     }>
     onGitSourcesProgress: (callback: (progress: GitRefreshProgress) => void) => () => void
+    /**
+     * Read-only remote check over every tracked repo (no pull, no writes).
+     * The Sources page calls this on open; main also runs it on a 24h
+     * quiet-hours schedule and pushes `onGitSourcesUpdatesAvailable`.
+     */
+    gitSourcesCheckUpdates: () => Promise<GitUpdateCheckResult>
+    onGitSourcesUpdatesAvailable: (
+      callback: (payload: GitUpdatesAvailable) => void,
+    ) => () => void
     gitSourcesRemove: (
       repoName: string,
       action: "unlink" | "detach" | "keep-links",
