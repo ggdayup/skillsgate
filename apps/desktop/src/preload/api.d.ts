@@ -19,6 +19,13 @@ declare global {
     active: string[]
   }
 
+  /** Shape returned by the `agents:detect` IPC (main's DetectedAgentInfo). */
+  interface DetectedAgent {
+    name: string
+    displayName: string
+    shortCode: string
+  }
+
   interface InstalledSkill {
     name: string
     description: string

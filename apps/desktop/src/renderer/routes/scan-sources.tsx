@@ -1,6 +1,13 @@
 import { t } from "../lib/i18n"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useEffect, useMemo, useRef, useState } from "react"
 import { electronAPI } from "../lib/electron-api"
+
+/** Parent directory of a skill's `subPath`; "" means the repository root. */
+function skillDirOf(subPath: string): string {
+  const trimmed = subPath.replace(/[/\\]+$/, "")
+  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"))
+  return i === -1 ? "" : trimmed.slice(0, i)
+}
 
 /**
  * What a finished refresh actually did, including the delta against what the
@@ -175,6 +182,10 @@ export function ScanSources() {
   const [removingSkill, setRemovingSkill] = useState<string | null>(null)
   const [batchRemovingCore, setBatchRemovingCore] = useState(false)
   const [selectedSkillNames, setSelectedSkillNames] = useState<Set<string>>(new Set())
+  // Anchor for Shift+click range selection. The name is remembered so the
+  // anchor survives filter changes: the index is re-resolved against the
+  // currently visible list at click time.
+  const lastAnchorRef = useRef<{ index: number; name: string } | null>(null)
   const [batchConfirmModal, setBatchConfirmModal] = useState<{
     repo: GitRepoSummary
     skillNames: string[]
@@ -578,8 +589,88 @@ export function ScanSources() {
   }, [selectedRepo, skillSearch])
 
   const totalDiscoveredSkills = gitRepos.reduce((acc, r) => acc + r.skills.length, 0)
+
+  // Skills grouped by their parent directory so each folder gets its own
+  // select-all between the repo-level toolbar and the per-skill checkboxes.
+  const groupedSkills = useMemo(() => {
+    const byDir = new Map<
+      string,
+      { skill: (typeof filteredSkills)[number]; index: number }[]
+    >()
+    filteredSkills.forEach((skill, index) => {
+      const dir = skillDirOf(skill.subPath)
+      const arr = byDir.get(dir)
+      if (arr) arr.push({ skill, index })
+      else byDir.set(dir, [{ skill, index }])
+    })
+    return [...byDir.entries()]
+      .sort((a, b) => (a[0] === "" ? -1 : b[0] === "" ? 1 : a[0].localeCompare(b[0])))
+      .map(([dir, items]) => ({ dir, items }))
+  }, [filteredSkills])
+
+  function addFilteredToSelection(matches: (skill: GitRepoSummary["skills"][number]) => boolean) {
+    setSelectedSkillNames((prev) => {
+      const next = new Set(prev)
+      for (const s of filteredSkills) if (matches(s)) next.add(s.name)
+      return next
+    })
+  }
+
+  function invertFilteredSelection() {
+    setSelectedSkillNames((prev) => {
+      const next = new Set(prev)
+      for (const s of filteredSkills) {
+        if (next.has(s.name)) next.delete(s.name)
+        else next.add(s.name)
+      }
+      return next
+    })
+  }
+
+  function toggleGroupSelection(names: string[], deselect: boolean) {
+    setSelectedSkillNames((prev) => {
+      const next = new Set(prev)
+      for (const name of names) {
+        if (deselect) next.delete(name)
+        else next.add(name)
+      }
+      return next
+    })
+  }
+
+  function toggleSkillSelection(skill: GitRepoSummary["skills"][number], index: number, shiftKey: boolean) {
+    const anchor = lastAnchorRef.current
+    const anchorIndex = anchor
+      ? filteredSkills.findIndex((s) => s.name === anchor.name)
+      : -1
+    setSelectedSkillNames((prev) => {
+      const next = new Set(prev)
+      const willSelect = !next.has(skill.name)
+      if (shiftKey && anchorIndex >= 0) {
+        const from = Math.min(anchorIndex, index)
+        const to = Math.max(anchorIndex, index)
+        for (let i = from; i <= to; i++) {
+          const s = filteredSkills[i]
+          if (willSelect) next.add(s.name)
+          else next.delete(s.name)
+        }
+      } else if (willSelect) {
+        next.add(skill.name)
+      } else {
+        next.delete(skill.name)
+      }
+      return next
+    })
+    lastAnchorRef.current = { index, name: skill.name }
+  }
+
   const updateAvailableCount = Object.values(updateChecks).filter(
     (check) => check.status === "update-available",
+  ).length
+
+  const filteredCoreCount = filteredSkills.filter((s) => s.isCoreInstalled).length
+  const filteredNotInstalledCount = filteredSkills.filter(
+    (s) => !s.isCoreInstalled && s.installedAgents.length === 0,
   ).length
 
   return (
@@ -838,6 +929,8 @@ export function ScanSources() {
                         onClick={() => {
                           setSelectedRepoName(repo.name)
                           setSkillSearch("")
+                          setSelectedSkillNames(new Set())
+                          lastAnchorRef.current = null
                         }}
                         className={`group relative flex flex-col rounded-2xl border p-4 transition-all cursor-pointer text-left ${
                           isSelected
@@ -1216,7 +1309,7 @@ export function ScanSources() {
                                 <path d="m21 21-4.3-4.3" />
                               </svg>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center justify-end gap-1.5">
                               {skillSearch && (
                                 <button
                                   onClick={() => setSkillSearch("")}
@@ -1226,15 +1319,53 @@ export function ScanSources() {
                                 </button>
                               )}
                               <button
-                                onClick={() => {
-                                  const coreSkills = selectedRepo.skills
-                                    .filter((s) => s.isCoreInstalled)
-                                    .map((s) => s.name)
-                                  setSelectedSkillNames(new Set(coreSkills))
-                                }}
+                                onClick={() =>
+                                  addFilteredToSelection(() => true)
+                                }
                                 className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted hover:text-foreground hover:bg-surface transition-colors"
+                                title={t("Select all skills visible under the current filter")}
                               >
-                                {t("Select all installed in Core")}
+                                {t("Select all")} ({filteredSkills.length})
+                              </button>
+                              <button
+                                onClick={invertFilteredSelection}
+                                className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted hover:text-foreground hover:bg-surface transition-colors"
+                                title={t("Toggle the selection of all skills visible under the current filter")}
+                              >
+                                {t("Invert")}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  addFilteredToSelection(
+                                    (s) => !s.isCoreInstalled && s.installedAgents.length === 0,
+                                  )
+                                }
+                                disabled={filteredNotInstalledCount === 0}
+                                className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted hover:text-foreground hover:bg-surface transition-colors disabled:opacity-40"
+                                title={t("Select not installed")}
+                              >
+                                {t("Not installed")} ({filteredNotInstalledCount})
+                              </button>
+                              <button
+                                onClick={() =>
+                                  addFilteredToSelection((s) => s.isCoreInstalled)
+                                }
+                                disabled={filteredCoreCount === 0}
+                                className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted hover:text-foreground hover:bg-surface transition-colors disabled:opacity-40"
+                                title={t("Select all installed in Core")}
+                              >
+                                {t("In Core")} ({filteredCoreCount})
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setSelectedSkillNames(new Set())
+                                  lastAnchorRef.current = null
+                                }}
+                                disabled={selectedSkillNames.size === 0}
+                                className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted hover:text-foreground hover:bg-surface transition-colors disabled:opacity-40"
+                                title={t("Clear the current skill selection")}
+                              >
+                                {t("Clear")}
                               </button>
                             </div>
                           </div>
@@ -1410,7 +1541,36 @@ export function ScanSources() {
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                        {filteredSkills.map((skill) => {
+                        {groupedSkills.map((group) => {
+                          const groupNames = group.items.map((it) => it.skill.name)
+                          const groupSelected = groupNames.filter((n) =>
+                            selectedSkillNames.has(n),
+                          ).length
+                          const groupAll = groupSelected === groupNames.length
+
+                          return (
+                            <Fragment key={group.dir || "__root"}>
+                              {/* Directory group header: one select-all per folder */}
+                              <div className="col-span-full flex items-center gap-2 px-1 pt-1">
+                                <input
+                                  type="checkbox"
+                                  checked={groupAll}
+                                  ref={(el) => {
+                                    if (el) el.indeterminate = groupSelected > 0 && !groupAll
+                                  }}
+                                  onChange={() => toggleGroupSelection(groupNames, groupAll)}
+                                  className="rounded border-border text-primary focus:ring-0 cursor-pointer"
+                                />
+                                <span className="text-[11px] font-mono font-semibold text-foreground/80 truncate">
+                                  {group.dir || t("Repository root")}
+                                </span>
+                                <span className="shrink-0 text-[10px] font-mono text-muted/70">
+                                  {group.items.length} {t("skills")}
+                                  {groupSelected > 0 &&
+                                    ` · ${groupSelected} ${t("Selected")}`}
+                                </span>
+                              </div>
+                              {group.items.map(({ skill, index }) => {
                           const isInstallingThis = installingSkill === skill.name
 
                           return (
@@ -1424,12 +1584,14 @@ export function ScanSources() {
                                     <input
                                       type="checkbox"
                                       checked={selectedSkillNames.has(skill.name)}
-                                      onChange={(e) => {
-                                        const next = new Set(selectedSkillNames)
-                                        if (e.target.checked) next.add(skill.name)
-                                        else next.delete(skill.name)
-                                        setSelectedSkillNames(next)
-                                      }}
+                                      onChange={(e) =>
+                                        toggleSkillSelection(
+                                          skill,
+                                          index,
+                                          (e.nativeEvent as MouseEvent)
+                                            .shiftKey ?? false,
+                                        )
+                                      }
                                       className="rounded border-border text-primary focus:ring-0 cursor-pointer"
                                     />
                                     <span className="text-[13px] font-bold text-foreground font-mono truncate">
@@ -1494,6 +1656,9 @@ export function ScanSources() {
                                 )}
                               </div>
                             </div>
+                          )
+                              })}
+                            </Fragment>
                           )
                         })}
                       </div>

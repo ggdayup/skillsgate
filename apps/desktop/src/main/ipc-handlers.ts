@@ -2269,9 +2269,6 @@ export function registerIpcHandlers(): void {
       // lock entry here is what used to make an install that wrote zero files
       // still report as installed.
       if (targetAgents.length === 0) {
-        if (tmpDir) {
-          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-        }
         return [
           {
             skillName: source,

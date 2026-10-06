@@ -2794,7 +2794,7 @@ export function Home() {
         width={toolsPane.width}
         totalSkillCount={skills.length}
         favoritesCount={installedFavoritesCount}
-        toolAgents={agents}
+        toolAgents={agentRegistry}
         activeAgents={activeAgents}
         hiddenAgents={hiddenAgents}
         onAddAgent={handleAddAgent}
